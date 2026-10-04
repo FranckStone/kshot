@@ -129,6 +129,7 @@ final class ToolbarView: NSView {
 
     init() {
         super.init(frame: .zero)
+        wantsLayer = true
 
         func add(_ action: ToolbarAction, _ symbol: String, fallback: String? = nil, _ tip: String, role: ToolButton.Role = .normal) {
             let b = ToolButton(symbol: symbol, fallback: fallback, tip: tip, role: role)
@@ -215,6 +216,7 @@ final class OptionsView: NSView {
 
     init() {
         super.init(frame: .zero)
+        wantsLayer = true
         let width = pad * 2 + cell * CGFloat(StrokeSize.allCases.count) + gap + 1 + gap + cell * CGFloat(Palette.colors.count)
         frame.size = CGSize(width: width, height: OptionsView.height)
         content.owner = self

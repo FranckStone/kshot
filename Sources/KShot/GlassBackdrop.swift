@@ -39,3 +39,43 @@ final class SeparatorView: NSView {
         bounds.fill()
     }
 }
+
+/// 尺寸标签：玻璃胶囊 + 等宽数字
+final class SizeLabelView: NSView {
+    static let height: CGFloat = 24
+    private let label = NSTextField(labelWithString: "")
+    private let content = NSView()
+    private let padX: CGFloat = 9
+
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 80, height: SizeLabelView.height))
+        wantsLayer = true // NSGlassEffectView 需要 layer-backed 的父视图，否则不渲染
+        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        label.textColor = .labelColor
+        label.alignment = .center
+        content.addSubview(label)
+        let backdrop = GlassBackdrop.make(cornerRadius: SizeLabelView.height / 2, content: content)
+        backdrop.frame = bounds
+        addSubview(backdrop)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// 更新文字并返回新的尺寸
+    func setText(_ text: String) -> CGSize {
+        label.stringValue = text
+        label.sizeToFit()
+        let w = ceil(label.frame.width) + padX * 2
+        frame.size = CGSize(width: w, height: SizeLabelView.height)
+        content.frame = CGRect(origin: .zero, size: frame.size)
+        label.frame = CGRect(x: padX, y: (SizeLabelView.height - label.frame.height) / 2, width: ceil(label.frame.width), height: label.frame.height)
+        return frame.size
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    var debugText: String { label.stringValue }
+    var debugLabelFrame: CGRect { label.frame }
+}

@@ -53,6 +53,7 @@ final class OverlayView: NSView {
 
     private let toolbar = ToolbarView()
     private let options = OptionsView()
+    private let sizeLabel = SizeLabelView()
     private var textEditor: TextEditorView?
 
     private static let dimAlpha: CGFloat = 0.42
@@ -79,6 +80,8 @@ final class OverlayView: NSView {
 
         toolbar.isHidden = true
         options.isHidden = true
+        sizeLabel.isHidden = true
+        addSubview(sizeLabel)
         addSubview(toolbar)
         addSubview(options)
         toolbar.onAction = { [weak self] action in self?.handle(action) }
@@ -157,8 +160,28 @@ final class OverlayView: NSView {
             }
         }
 
-        // 6. 尺寸标签
-        drawSizeLabel(for: cut, in: ctx)
+    }
+
+    /// 每次标记重绘时同步更新尺寸标签（玻璃胶囊子视图）
+    override var needsDisplay: Bool {
+        didSet { if needsDisplay { updateSizeLabel() } }
+    }
+
+    private func updateSizeLabel() {
+        guard let rect = selection ?? hoverRect else {
+            sizeLabel.isHidden = true
+            return
+        }
+        let scale = shot.scale
+        let size = sizeLabel.setText("\(Int((rect.width * scale).rounded())) × \(Int((rect.height * scale).rounded()))")
+        var origin = CGPoint(x: rect.minX, y: rect.minY - size.height - 6)
+        if origin.y < bounds.minY + 2 {
+            origin.y = rect.minY + 6
+            origin.x = rect.minX + 6
+        }
+        origin.x = min(max(bounds.minX + 2, origin.x), bounds.maxX - size.width - 2)
+        sizeLabel.frame = CGRect(origin: origin, size: size)
+        sizeLabel.isHidden = false
     }
 
     private var showsHandles: Bool {
@@ -167,29 +190,6 @@ final class OverlayView: NSView {
         case .selecting, .pending, .drawing: return false
         default: return true
         }
-    }
-
-    private func drawSizeLabel(for rect: CGRect, in ctx: CGContext) {
-        let scale = shot.scale
-        let text = "\(Int((rect.width * scale).rounded())) × \(Int((rect.height * scale).rounded()))"
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: NSColor.white,
-        ]
-        let str = NSAttributedString(string: text, attributes: attrs)
-        let size = str.size()
-        let padX: CGFloat = 7, padY: CGFloat = 3
-        var origin = CGPoint(x: rect.minX, y: rect.minY - size.height - padY * 2 - 6)
-        if origin.y < bounds.minY + 2 {
-            origin.y = rect.minY + 6
-            origin.x = rect.minX + 6
-        }
-        origin.x = min(max(bounds.minX + 2, origin.x), bounds.maxX - size.width - padX * 2 - 2)
-        let bg = CGRect(x: origin.x, y: origin.y, width: size.width + padX * 2, height: size.height + padY * 2)
-        ctx.setFillColor(NSColor(white: 0, alpha: 0.65).cgColor)
-        ctx.addPath(CGPath(roundedRect: bg, cornerWidth: 4, cornerHeight: 4, transform: nil))
-        ctx.fillPath()
-        str.draw(at: CGPoint(x: bg.minX + padX, y: bg.minY + padY))
     }
 
     // MARK: - 窗口识别
