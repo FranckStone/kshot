@@ -121,13 +121,14 @@ final class ImageStitcher {
         let limit = h / 2
         var run = 0
         var texturedCount = 0
+        var lastTexturedRun = 0 // 固定区域只算到最后一个有纹理的行，紧挨着的空白行归内容
         while run < limit {
             let i = fromTop ? run : h - 1 - run
             guard rowDiff(a.rows[i], b.rows[i]) < 2.0 else { break }
-            if a.textured[i] { texturedCount += 1 }
             run += 1
+            if a.textured[i] { texturedCount += 1; lastTexturedRun = run }
         }
-        return texturedCount >= 2 ? run : 0
+        return texturedCount >= 2 ? lastTexturedRun : 0
     }
 
     // MARK: - 匹配
