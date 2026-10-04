@@ -743,6 +743,19 @@ final class SelfTest {
     func add(_ name: String, _ body: @escaping () -> Void) { steps.append((name, body)) }
 
     func run() {
+        if let i = CommandLine.arguments.firstIndex(of: "--pause-at"), i + 1 < CommandLine.arguments.count,
+           let n = Int(CommandLine.arguments[i + 1]), index >= n {
+            Log.info("selftest paused at step \(n)")
+            // 用 ScreenCaptureKit 抓一张真实合成后的屏幕（包含玻璃效果），便于核对外观
+            let url = dir.appendingPathComponent("screen.png")
+            Task { @MainActor in
+                if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
+                    try? data.write(to: url)
+                    Log.info("screen captured to \(url.path)")
+                }
+            }
+            return
+        }
         guard index < steps.count else {
             Log.info("selftest done")
             return

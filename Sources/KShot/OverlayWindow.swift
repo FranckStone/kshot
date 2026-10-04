@@ -8,7 +8,7 @@ final class OverlayWindow: NSWindow {
         let frame = shot.screen.frame
         overlayView = OverlayView(frame: CGRect(origin: .zero, size: frame.size), shot: shot, windows: windows, session: session)
         super.init(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        level = .screenSaver
+        level = CommandLine.arguments.contains("--low-level") ? .floating : .screenSaver
         isOpaque = true
         backgroundColor = .black
         hasShadow = false
