@@ -31,14 +31,30 @@ enum LongShotDemo {
         let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/KShot-selftest")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            let session = LongScreenshotSession(screen: screen, region: region, forceAuto: true)
-            session.customScroller = { step in
-                let clip = scroll.contentView
-                let maxY = max(0, doc.bounds.height - clip.bounds.height)
-                let y = min(maxY, clip.bounds.origin.y + step)
-                clip.scroll(to: CGPoint(x: 0, y: y))
-                scroll.reflectScrolledClipView(clip)
+        let manual = CommandLine.arguments.contains("--manual")
+        func scrollBy(_ step: CGFloat) {
+            let clip = scroll.contentView
+            let maxY = max(0, doc.bounds.height - clip.bounds.height)
+            let y = max(0, min(maxY, clip.bounds.origin.y + step))
+            clip.scroll(to: CGPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(clip)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { MainActor.assumeIsolated {
+            let session = LongScreenshotSession(screen: screen, region: region, forceAuto: !manual)
+            session.customScroller = { step in scrollBy(step) }
+            if manual {
+                // 模拟人手滚动：步长不一、偶尔往回滚、速度忽快忽慢，滚到底后按“完成”
+                let steps: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 260, 110, -40, 180, 90, 240, 300, 120, 160, 80, 200, 150, 100, 90, 60]
+                var i = 0
+                func next() {
+                    guard i < steps.count else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { MainActor.assumeIsolated { session.debugFinish() } }
+                        return
+                    }
+                    scrollBy(steps[i]); i += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int.random(in: 90...260))) { MainActor.assumeIsolated { next() } }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { MainActor.assumeIsolated { next() } }
             }
             session.debugOutputURL = dir.appendingPathComponent("longshot.png")
             session.onFinish = { result in
@@ -87,7 +103,7 @@ enum LongShotDemo {
                 }
             }
             session.start()
-        }
+        } }
     }
 }
 

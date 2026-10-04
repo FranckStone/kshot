@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// 长截图（滚动截图）会话：自动向区域发送滚轮事件，逐帧抓取并拼接。
+/// 长截图（滚动截图）会话：用户自己滚动（或可选自动滚动），程序持续抓帧并实时拼接、预览。
 @MainActor
 final class LongScreenshotSession {
     nonisolated(unsafe) static var current: LongScreenshotSession?
@@ -13,16 +13,18 @@ final class LongScreenshotSession {
     private var running = false
     private var frames = 0
     private var staticCount = 0
-    private let autoScroll: Bool
+    private var autoScroll = false
     private var excluded: Set<CGWindowID> = []
+    private var capturer: RegionCapturer?
+    private var lastHint = ""
+
     /// 调试：用自定义方式滚动（替代发送系统滚轮事件）
-    var customScroller: ((CGFloat) -> Void)?
+    var customScroller: (@MainActor (CGFloat) -> Void)?
     /// 调试：完成后把结果写到这个路径
     var debugOutputURL: URL?
     /// 调试：完成回调
     var onFinish: ((CGImage) -> Void)?
 
-    private var capturer: RegionCapturer?
     /// 每帧保存到 ~/Library/Logs/KShot-longshot/，便于排查拼接问题
     private let dumpDir: URL = {
         let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/KShot-longshot")
@@ -32,19 +34,13 @@ final class LongScreenshotSession {
     }()
     private var dumpIndex = 0
 
-    /// 每次滚动的距离（pt），取区域高度的 45%，保证帧间有足够重叠
-    private var scrollStep: CGFloat { (region.height * 0.45).rounded() }
+    /// 自动滚动时每次的距离（pt）：区域高度的 30%，重叠充足
+    private var scrollStep: CGFloat { (region.height * 0.3).rounded() }
 
     init(screen: NSScreen, region: CGRect, forceAuto: Bool = false) {
         self.screen = screen
         self.region = region
-        if forceAuto {
-            autoScroll = true
-        } else {
-            // 需要“辅助功能”权限才能发送滚轮事件；没有时退化为手动滚动
-            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-            autoScroll = AXIsProcessTrustedWithOptions(opts)
-        }
+        autoScroll = forceAuto
     }
 
     func start() {
@@ -54,12 +50,29 @@ final class LongScreenshotSession {
         panel = LongShotPanel(near: regionCocoa, screen: screen)
         panel.onFinish = { [weak self] in self?.finish() }
         panel.onCancel = { [weak self] in self?.cancel() }
+        panel.onToggleAuto = { [weak self] in self?.toggleAuto() }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         excluded = [CGWindowID(panel.windowNumber)]
-        panel.setStatus(autoScroll ? "正在自动滚动并拼接…" : "未授予“辅助功能”权限：请手动滚动内容，完成后点“完成”")
+        panel.setAuto(autoScroll)
+        panel.setStatus("在区域内用触控板或滚轮向下滚动，内容会实时拼接到预览里")
         Log.info("longshot start region=\(region) auto=\(autoScroll)")
         Task { @MainActor in await loop() }
+    }
+
+    private func toggleAuto() {
+        if !autoScroll {
+            // 自动滚动需要“辅助功能”权限来发送滚轮事件
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+            guard customScroller != nil || AXIsProcessTrustedWithOptions(opts) else {
+                panel.setStatus("自动滚动需要在“系统设置 › 隐私与安全性 › 辅助功能”里勾选 KShot，勾选后再点一次")
+                return
+            }
+        }
+        autoScroll.toggle()
+        staticCount = 0
+        panel.setAuto(autoScroll)
+        panel.setStatus(autoScroll ? "正在自动滚动…到底后自动停止，也可随时按回车完成" : "已切回手动：请自己滚动内容")
     }
 
     private func loop() async {
@@ -69,48 +82,66 @@ final class LongScreenshotSession {
             fail("抓屏失败：\(error.localizedDescription)")
             return
         }
-        // 第一帧
-        guard let first = await settledFrame() else { fail("抓屏失败"); return }
+        guard let first = await captureFrame() else { fail("抓屏失败"); return }
         dump(first.image)
         _ = stitcher.push(frame: first)
         frames = 1
-        panel.setProgress(frames: frames, height: stitcher.totalHeight)
+        updatePanel()
 
         while running {
             if autoScroll {
                 postScroll()
-                try? await Task.sleep(for: .milliseconds(120))
+                try? await Task.sleep(for: .milliseconds(160))
             } else {
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: .milliseconds(70))
             }
-            guard running, let frame = await settledFrame() else { continue }
-            let expected = Int(scrollStep * screen.backingScaleFactor)
-            dump(frame.image)
-            switch stitcher.push(frame: frame, expectedShift: autoScroll ? expected : 0) {
+            guard running, let frame = await captureFrame() else { continue }
+            let expected = autoScroll ? Int(scrollStep * screen.backingScaleFactor) : 0
+            switch stitcher.push(frame: frame, expectedShift: expected) {
             case .appended(let rows):
                 frames += 1
                 staticCount = 0
+                dump(frame.image)
                 let d = stitcher.lastDiagnostics
-                Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", d.score)), header \(d.header), footer \(d.footer), expected \(expected)), total \(stitcher.totalHeight)")
-                panel.setProgress(frames: frames, height: stitcher.totalHeight)
+                Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", d.score)), header \(d.header), footer \(d.footer)), total \(stitcher.totalHeight)")
+                hint("")
+                updatePanel()
             case .unchanged:
                 staticCount += 1
-                if autoScroll && staticCount >= 2 {
+                if autoScroll && staticCount >= 3 {
                     Log.info("longshot reached bottom")
                     finish()
                 }
+            case .scrolledUp:
+                hint("往回滚了，继续向下滚动即可")
             case .noMatch:
                 staticCount = 0
+                dump(frame.image)
                 let d = stitcher.lastDiagnostics
-                Log.info("longshot no match (header \(d.header), footer \(d.footer), expected \(expected))")
+                Log.info("longshot no match (header \(d.header), footer \(d.footer))")
+                hint(autoScroll ? "画面变化太大，已暂停自动滚动" : "滚得太快，接不上了：请往回滚一点再继续")
+                if autoScroll { autoScroll = false; panel.setAuto(false) }
             }
+        }
+    }
+
+    private func hint(_ s: String) {
+        guard s != lastHint else { return }
+        lastHint = s
+        if !s.isEmpty { panel.setStatus(s) }
+        else if !autoScroll { panel.setStatus("继续向下滚动；完成后按回车") }
+    }
+
+    private func updatePanel() {
+        panel.setProgress(frames: frames, height: stitcher.totalHeight)
+        if let preview = stitcher.preview(minHeight: Int(region.height * screen.backingScaleFactor * 1.5)) {
+            panel.setPreview(preview, scale: screen.backingScaleFactor)
         }
     }
 
     /// 每帧忽略底部的几个像素：区域贴着窗口底边时，窗口圆角/阴影会在每个接缝处留下痕迹
     private static let bottomTrimPx = 26
 
-    /// 抓一帧并在后台算好行签名
     private func captureFrame() async -> ImageStitcher.Frame? {
         guard let capturer, let raw = try? await capturer.capture() else { return nil }
         let trim = Self.bottomTrimPx
@@ -126,25 +157,12 @@ final class LongScreenshotSession {
         }
     }
 
-    /// 连续抓帧直到画面静止（滚动动画结束），最多等约 0.6 秒
-    private func settledFrame() async -> ImageStitcher.Frame? {
-        guard var last = await captureFrame() else { return nil }
-        for _ in 0..<6 {
-            try? await Task.sleep(for: .milliseconds(70))
-            guard running, let next = await captureFrame() else { return last }
-            if ImageStitcher.isSame(last, next) { return next }
-            last = next
-        }
-        return last
-    }
-
-    /// 向区域中心发送向下滚动的滚轮事件
+    /// 向区域中心发送向下滚动的滚轮事件（连续像素滚动，应用按精确像素量滚动、不做动画）
     private func postScroll() {
         if let customScroller { customScroller(scrollStep); return }
         let center = screen.cgPoint(fromLocal: region.center)
         let amount = Int32(scrollStep)
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -amount, wheel2: 0, wheel3: 0) else { return }
-        // 标记为连续（触控板式）像素滚动，应用会精确按像素量滚动而不是加速
         event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
         event.location = center
         event.post(tap: .cghidEventTap)
@@ -166,6 +184,8 @@ final class LongScreenshotSession {
         Log.info("longshot done: \(image.width)x\(image.height), frames=\(frames)")
     }
 
+    func debugFinish() { finish() }
+
     private func cancel() {
         running = false
         panel.orderOut(nil)
@@ -184,21 +204,25 @@ final class LongScreenshotSession {
     }
 }
 
-/// 长截图进行中的控制面板（玻璃）
+/// 长截图进行中的控制面板（玻璃）：实时预览 + 状态 + 自动/手动切换
 final class LongShotPanel: NSWindow {
     var onFinish: (() -> Void)?
     var onCancel: (() -> Void)?
-    private let status = NSTextField(labelWithString: "")
+    var onToggleAuto: (() -> Void)?
+    private let status = NSTextField(wrappingLabelWithString: "")
     private let progress = NSTextField(labelWithString: "")
+    private let preview = NSImageView()
+    private var autoButton: NSButton!
+    private static let size = NSSize(width: 300, height: 440)
 
     init(near region: CGRect, screen: NSScreen) {
-        let size = NSSize(width: 360, height: 92)
-        // 放在区域下方；放不下就放上方；再不行放区域内底部
-        var origin = CGPoint(x: region.midX - size.width / 2, y: region.minY - size.height - 12)
+        let size = LongShotPanel.size
+        // 放在区域右侧；放不下就放左侧；再不行就贴屏幕右边
         let v = screen.visibleFrame
-        if origin.y < v.minY { origin.y = region.maxY + 12 }
-        if origin.y + size.height > v.maxY { origin.y = region.minY + 16 }
-        origin.x = min(max(v.minX + 8, origin.x), v.maxX - size.width - 8)
+        var origin = CGPoint(x: region.maxX + 16, y: region.maxY - size.height)
+        if origin.x + size.width > v.maxX { origin.x = region.minX - size.width - 16 }
+        if origin.x < v.minX { origin.x = v.maxX - size.width - 8 }
+        origin.y = min(max(v.minY + 8, origin.y), v.maxY - size.height - 8)
         super.init(contentRect: CGRect(origin: origin, size: size), styleMask: .borderless, backing: .buffered, defer: false)
         level = .floating
         isOpaque = false
@@ -227,37 +251,50 @@ final class LongShotPanel: NSWindow {
         progress.frame = CGRect(x: size.width - 196, y: size.height - 31, width: 180, height: 18)
         content.addSubview(progress)
 
+        preview.imageScaling = .scaleProportionallyUpOrDown
+        preview.imageAlignment = .alignBottom
+        preview.wantsLayer = true
+        preview.layer?.cornerRadius = 8
+        preview.layer?.masksToBounds = true
+        preview.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.08).cgColor
+        preview.frame = CGRect(x: 16, y: 112, width: size.width - 32, height: size.height - 160)
+        content.addSubview(preview)
+
         status.font = .systemFont(ofSize: 12)
         status.textColor = .secondaryLabelColor
-        status.lineBreakMode = .byTruncatingTail
-        status.frame = CGRect(x: 16, y: size.height - 54, width: size.width - 32, height: 18)
+        status.frame = CGRect(x: 16, y: 54, width: size.width - 32, height: 50)
         content.addSubview(status)
+
+        autoButton = NSButton(title: "自动滚动", target: self, action: #selector(toggleAuto))
+        autoButton.bezelStyle = .rounded
+        autoButton.setButtonType(.pushOnPushOff)
+        autoButton.frame = CGRect(x: 16, y: 14, width: 92, height: 28)
+        content.addSubview(autoButton)
 
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         cancel.bezelStyle = .rounded
         cancel.keyEquivalent = "\u{1b}"
-        cancel.frame = CGRect(x: size.width - 176, y: 10, width: 76, height: 28)
+        cancel.frame = CGRect(x: size.width - 164, y: 14, width: 70, height: 28)
         content.addSubview(cancel)
 
         let finish = NSButton(title: "完成", target: self, action: #selector(finishAction))
         finish.bezelStyle = .rounded
         finish.keyEquivalent = "\r"
-        finish.frame = CGRect(x: size.width - 92, y: 10, width: 76, height: 28)
+        finish.frame = CGRect(x: size.width - 86, y: 14, width: 70, height: 28)
         if #available(macOS 26.0, *) { finish.bezelColor = .accentGreen }
         content.addSubview(finish)
-
-        let hint = NSTextField(labelWithString: "⏎ 完成 · Esc 取消")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .tertiaryLabelColor
-        hint.frame = CGRect(x: 16, y: 15, width: 160, height: 16)
-        content.addSubview(hint)
     }
 
     override var canBecomeKey: Bool { true }
 
     func setStatus(_ s: String) { status.stringValue = s }
     func setProgress(frames: Int, height: Int) { progress.stringValue = "已拼接 \(frames) 屏 · \(height) px" }
+    func setAuto(_ on: Bool) { autoButton.state = on ? .on : .off }
+    func setPreview(_ image: CGImage, scale: CGFloat) {
+        preview.image = NSImage(cgImage: image, size: NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale))
+    }
 
+    @objc private func toggleAuto() { onToggleAuto?() }
     @objc private func cancelAction() { onCancel?() }
     @objc private func finishAction() { onFinish?() }
 

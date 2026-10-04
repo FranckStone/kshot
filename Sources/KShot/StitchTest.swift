@@ -5,13 +5,13 @@ enum StitchTest {
     static func run() {
         let w = 800, viewport = 500, total = 3200
         guard let tall = makeTallImage(width: w, height: total) else { Log.info("stitch-test: 生成失败"); return }
-        for (name, steps) in [("fixed", Array(repeating: 250, count: 20)), ("random", [230, 190, 260, 240, 120, 250, 300, 180, 220, 260, 240, 250, 250])] {
+        for (name, steps) in [("fixed", Array(repeating: 250, count: 20)), ("random", [230, 190, 260, -150, 240, 120, 250, 300, -80, 180, 220, 260, 240, 250, 250])] {
             let stitcher = ImageStitcher()
             var offset = 0
             var frames: [CGImage] = []
             frames.append(tall.cropping(to: CGRect(x: 0, y: 0, width: w, height: viewport))!)
             for s in steps {
-                offset = min(total - viewport, offset + s)
+                offset = max(0, min(total - viewport, offset + s))
                 frames.append(tall.cropping(to: CGRect(x: 0, y: offset, width: w, height: viewport))!)
             }
             var outcomes: [String] = []
@@ -19,6 +19,7 @@ enum StitchTest {
                 switch stitcher.push(f, expectedShift: 250) {
                 case .appended(let r): outcomes.append("+\(r)")
                 case .unchanged: outcomes.append("=")
+                case .scrolledUp: outcomes.append("^")
                 case .noMatch: outcomes.append("x")
                 }
             }
@@ -43,6 +44,7 @@ enum StitchTest {
             switch stitcher.push(frame, expectedShift: 170) {
             case .appended(let r): outcomes.append("+\(r)")
             case .unchanged: outcomes.append("=")
+            case .scrolledUp: outcomes.append("^")
             case .noMatch: outcomes.append("x")
             }
         }

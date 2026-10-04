@@ -16,7 +16,8 @@ final class ImageStitcher {
     enum Outcome {
         case appended(rows: Int)   // 接上了新内容
         case unchanged             // 画面没变（没有滚动 / 已到底）
-        case noMatch               // 找不到重叠（画面变化太大）
+        case scrolledUp            // 往回滚了（内容在已拼接范围内），忽略
+        case noMatch               // 找不到重叠（滚得太快 / 画面变化太大）
     }
 
     struct Diagnostics {
@@ -29,6 +30,7 @@ final class ImageStitcher {
     private(set) var strips: [CGImage] = []
     private(set) var totalHeight = 0
     private(set) var lastDiagnostics = Diagnostics()
+    /// 锚点：最后一次拼接进去的帧，新帧都和它比
     private var previous: Frame?
     private var footerStrip: CGImage?
     private let maxTotalHeight: Int
@@ -53,8 +55,8 @@ final class ImageStitcher {
     /// 喂入一帧。expectedShift：预期滚动的像素数（内容单调时用于取舍），0 表示未知。
     func push(frame: Frame, expectedShift: Int = 0) -> Outcome {
         let image = frame.image
-        defer { previous = frame }
         guard let prev = previous else {
+            previous = frame
             strips = [image]
             totalHeight = image.height
             return .appended(rows: image.height)
@@ -74,10 +76,13 @@ final class ImageStitcher {
 
         guard let (shift, score) = Self.findShift(prev: prev, next: frame, top: bandTop, bottom: bandBottom, expected: expectedShift) else {
             lastDiagnostics = Diagnostics(shift: 0, score: -1, header: header, footer: footer)
+            // 反向能匹配上 → 用户往回滚了
+            if Self.findShift(prev: frame, next: prev, top: bandTop, bottom: bandBottom, expected: 0) != nil { return .scrolledUp }
             return .noMatch
         }
         lastDiagnostics = Diagnostics(shift: shift, score: score, header: header, footer: footer)
         guard shift > 0, totalHeight + shift <= maxTotalHeight else { return .unchanged }
+        previous = frame
 
         // 记住底栏（最后补一次）；首次发现底栏时，把第一帧条带底部的底栏裁掉，避免重复
         if footer > 0 {
@@ -95,11 +100,27 @@ final class ImageStitcher {
         return .appended(rows: shift)
     }
 
+    /// 预览：最后若干条带（至少 minHeight 像素）竖向合成
+    func preview(minHeight: Int) -> CGImage? {
+        var picked: [CGImage] = []
+        var h = 0
+        for s in strips.reversed() {
+            picked.insert(s, at: 0)
+            h += s.height
+            if h >= minHeight { break }
+        }
+        return Self.stack(picked)
+    }
+
     /// 把所有条带竖向合成一张图（末尾补上固定底栏）
     func compose() -> CGImage? {
-        guard let first = strips.first else { return nil }
         var all = strips
         if let footerStrip { all.append(footerStrip) }
+        return Self.stack(all)
+    }
+
+    static func stack(_ all: [CGImage]) -> CGImage? {
+        guard let first = all.first else { return nil }
         let w = first.width
         let h = all.reduce(0) { $0 + $1.height }
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,

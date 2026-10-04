@@ -38,11 +38,11 @@
 
 ![钉在屏幕上](docs/screenshot-pin.png)
 
-“长截图”对选区自动滚动并拼接成一张长图，完成后在编辑窗口里继续标注（工具与截图时一致）：
+“长截图”：自己滚动、程序实时拼接，完成后在编辑窗口里继续标注（工具与截图时一致）：
 
 ![长截图编辑](docs/screenshot-longshot-editor.png)
 
-拼接结果示例（对 2600pt 高的示例内容自动滚动 11 屏拼接，与真值逐像素比对一致，缩放显示）：
+拼接结果示例（对 2600pt 高的示例内容滚动拼接，与真值逐像素比对一致，缩放显示）：
 
 ![长截图](docs/screenshot-longshot-full.png)
 
@@ -77,7 +77,7 @@
 | `⏎` / 双击选区 / ⌘C | 完成，图片复制到剪贴板 |
 | `⌘S` | 保存为 PNG |
 | `⌘P` | 钉在屏幕上（悬浮图片：拖动移动、滚轮缩放、双击或 Esc 关闭、右键菜单） |
-| `⌘K` | 长截图（滚动截图）：自动向选区发送滚轮事件，每次滚动后等画面静止再抓帧，按重叠部分拼接，滚到底自动停止；需要“辅助功能”权限，未授权时可手动滚动。完成后进入图片编辑窗口，可继续标注、提取文字、翻译，再复制或保存 |
+| `⌘K` | 长截图（滚动截图）：你用触控板或滚轮在选区内正常向下滚动，程序持续抓帧并实时拼接，面板里有实时预览；往回滚不会重复，滚太快会提示往回一点。面板上的“自动滚动”可选（需要“辅助功能”权限）。回车完成后进入图片编辑窗口，可继续标注、提取文字、翻译，再复制或保存 |
 | `⌘T` | 提取文字：对选区做中英文 OCR，结果自动复制到剪贴板并弹出可编辑的结果窗口 |
 | `⌘L` | 翻译：识别选区文字后用系统翻译译成所选语言（中文译英、其他译中，可在结果窗口切换目标语言；macOS 15+，首次需按系统提示下载语言包） |
 | `⌘Z` | 撤销上一步标注 |
@@ -97,7 +97,8 @@ open build/KShot.app --args --shoot --demo --selftest --pause-at 18   # 停在�
 open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后一步改为“钉住”并抓屏
 open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后一步改为“提取文字”并抓屏
 open build/KShot.app --args --shoot --demo --selftest --translate-test   # 最后一步改为“翻译”并抓屏
-open build/KShot.app --args --longshot-demo      # 弹一个可滚动的示例窗口并对它跑完整长截图流程，结果存到 ~/Library/Logs/KShot-selftest/longshot.png
+open build/KShot.app --args --longshot-demo      # 弹一个可滚动的示例窗口并对它跑完整长截图流程（自动滚动），结果存到 ~/Library/Logs/KShot-selftest/longshot.png
+open build/KShot.app --args --longshot-demo --manual   # 同上，但由示例窗口模拟人手滚动（步长不一、会往回滚），验证手动模式
 open build/KShot.app --args --stitch-test        # 用合成长图验证拼接算法的像素精度
 open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域（pt，左上原点）启动长截图
 ```
@@ -121,7 +122,7 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
 - `Translator.swift` 基于系统 Translation 框架的翻译器（通过隐藏的 SwiftUI 宿主视图驱动）
-- `LongScreenshot.swift` / `ImageStitcher.swift` 长截图会话（自动滚动、等待画面静止、控制面板）与帧间拼接算法
+- `LongScreenshot.swift` / `ImageStitcher.swift` 长截图会话（持续抓帧、实时预览面板、可选自动滚动）与以“最后拼接帧”为锚点的拼接算法（自动识别固定顶栏/底栏）
 - `ImageEditorWindow.swift` 图片编辑窗口（长截图完成后的标注画布，复用工具条与标注渲染）
 - `MenuBarIcon.swift` 菜单栏模板图标
 - `DemoScene.swift` 演示模式的示例桌面
