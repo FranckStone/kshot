@@ -161,8 +161,8 @@ final class OverlayView: NSView {
         // 4. 边框（悬停状态用玻璃框子视图，选区用细线）
         if selection != nil {
             ctx.setStrokeColor(NSColor.wechatGreen.cgColor)
-            ctx.setLineWidth(2)
-            ctx.stroke(cut.insetBy(dx: -1, dy: -1))
+            ctx.setLineWidth(1.5)
+            ctx.stroke(cut.insetBy(dx: -0.75, dy: -0.75))
         }
 
     }

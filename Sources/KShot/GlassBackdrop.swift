@@ -128,7 +128,7 @@ final class RingView: NSView {
 
 /// 玻璃边框：四条玻璃条拼成一圈，macOS 26+ 用容器视图把它们融合成连续的框
 final class GlassFrameView: NSView {
-    static let thickness: CGFloat = 7
+    static let thickness: CGFloat = 4
     private var strips: [NSView] = []
     private var host: NSView?
 
