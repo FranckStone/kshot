@@ -38,6 +38,10 @@
 
 ![钉在屏幕上](docs/screenshot-pin.png)
 
+“提取文字”用系统 Vision 做中英文 OCR，结果自动复制到剪贴板，窗口里可以继续编辑：
+
+![提取文字](docs/screenshot-ocr.png)
+
 ## 构建与运行
 
 ```bash
@@ -59,12 +63,13 @@
 | 拖拽 | 自由框选 |
 | 拖动选区 / 拖动 8 个把手 | 移动 / 调整选区 |
 | 方向键（+⇧ 大步） | 微调选区位置 |
-| 工具条 | 矩形、椭圆、箭头、画笔、马赛克、文字、撤销、钉在屏幕上、保存、取消、完成 |
+| 工具条 | 矩形、椭圆、箭头、画笔、马赛克、文字、撤销、钉在屏幕上、提取文字、保存、取消、完成 |
 | 选项面板 | 选工具后出现：三档粗细/字号 + 8 色 |
 | 文字工具 | 在选区内点击输入；点击别处、Esc 或 ⌘⏎ 结束 |
 | `⏎` / 双击选区 / ⌘C | 完成，图片复制到剪贴板 |
 | `⌘S` | 保存为 PNG |
 | `⌘P` | 钉在屏幕上（悬浮图片：拖动移动、滚轮缩放、双击或 Esc 关闭、右键菜单） |
+| `⌘T` | 提取文字：对选区做中英文 OCR，结果自动复制到剪贴板并弹出可编辑的结果窗口 |
 | `⌘Z` | 撤销上一步标注 |
 | 右键 | 有选区时回到窗口识别状态；无选区时退出 |
 | `Esc` | 退出截图 |
@@ -80,6 +85,7 @@ open build/KShot.app --args --shoot --dump       # 每秒把遮罩渲染到 ~/Li
 open build/KShot.app --args --shoot --demo --selftest   # 用绘制的示例桌面代替真实抓屏，生成不含隐私的演示截图
 open build/KShot.app --args --shoot --demo --selftest --pause-at 18   # 停在第 18 步并用 ScreenCaptureKit 抓一张真实合成的屏幕（含玻璃效果）
 open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后一步改为“钉住”并抓屏
+open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后一步改为“提取文字”并抓屏
 ```
 
 安装到“应用程序”并开机自启：`./install.sh`（首次从 /Applications 启动时自动注册登录项，可在菜单里关闭）。
@@ -99,6 +105,7 @@ open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后�
 - `Annotations.swift` 标注模型与渲染
 - `Exporter.swift` 裁剪合成、剪贴板、保存
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
+- `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
 - `MenuBarIcon.swift` 菜单栏模板图标
 - `DemoScene.swift` 演示模式的示例桌面
 - `tools/make-icon.swift` App 图标生成脚本（含多种备选风格）

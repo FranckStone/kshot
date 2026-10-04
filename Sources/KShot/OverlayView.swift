@@ -465,6 +465,7 @@ final class OverlayView: NSView {
             case "s": target.save(); return
             case "c": target.confirm(); return
             case "p": target.pin(); return
+            case "t": target.recognizeText(); return
             default: break
             }
         }
@@ -487,7 +488,7 @@ final class OverlayView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // 让 ⌘Z/⌘S/⌘C/⌘P 不触发系统提示音
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p"].contains(c) {
+        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p", "t"].contains(c) {
             keyDown(with: event)
             return true
         }
@@ -646,6 +647,7 @@ final class OverlayView: NSView {
             needsDisplay = true
         case .undo: undo()
         case .pin: pin()
+        case .ocr: recognizeText()
         case .save: save()
         case .cancel: session.cancel()
         case .confirm: confirm()
@@ -714,6 +716,39 @@ final class OverlayView: NSView {
         session.hideOverlays()
         Exporter.save(img) { [session] _ in
             session.end()
+        }
+    }
+
+    /// 提取选区内的文字（用原始截图，不含标注）
+    private func recognizeText() {
+        commitText()
+        guard let sel = selection,
+              let img = Exporter.render(shot: shot, selection: sel, annotations: [], renderer: renderer) else { return }
+        let frame = screen.cocoaRect(fromLocal: sel)
+        session.end(restoreFocus: false)
+        let win = OCRResultWindow(text: "正在识别…", near: frame)
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        Task { @MainActor in
+            do {
+                let lines = try await TextRecognizer.recognize(img)
+                let text = TextRecognizer.joined(lines)
+                if text.isEmpty {
+                    win.setText("")
+                    win.setStatus("未识别到文字")
+                } else {
+                    win.setText(text)
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(text, forType: .string)
+                    win.setStatus("已识别 \(lines.count) 处文字，已复制到剪贴板")
+                }
+                Log.info("ocr: \(lines.count) lines")
+            } catch {
+                win.setText("")
+                win.setStatus("识别失败：\(error.localizedDescription)")
+                Log.info("ocr failed: \(error)")
+            }
         }
     }
 
@@ -796,6 +831,19 @@ extension OverlayView {
 @MainActor
 final class SelfTest {
     static var demoBackdrop: NSWindow?
+
+    /// 演示模式：铺一层示例桌面窗口，避免抓屏时带上真实桌面内容
+    static func showDemoBackdrop(for o: OverlayView) {
+        let bg = NSWindow(contentRect: o.screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        bg.level = .normal
+        bg.isReleasedWhenClosed = false
+        let iv = NSImageView(frame: CGRect(origin: .zero, size: o.screen.frame.size))
+        iv.image = NSImage(cgImage: o.shot.image, size: o.screen.frame.size)
+        iv.imageScaling = .scaleAxesIndependently
+        bg.contentView = iv
+        bg.orderFront(nil)
+        demoBackdrop = bg
+    }
     private var steps: [(String, () -> Void)] = []
     let dir: URL
     private var index = 0
@@ -916,20 +964,27 @@ final class SelfTest {
             o.debugDrag([CGPoint(x: 100, y: 200), CGPoint(x: 300, y: 350), CGPoint(x: 700, y: 620)])
         }
         t.add("nudge-right") { o.debugKey(code: 124, chars: "") }
+        if CommandLine.arguments.contains("--ocr-test") {
+            t.add("ocr") {
+                if CommandLine.arguments.contains("--demo") { SelfTest.showDemoBackdrop(for: o) }
+                o.debugAction(.ocr)
+                let url = t.dir.appendingPathComponent("screen.png")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
+                    Task { @MainActor in
+                        Log.info("ocr text: \(OCRResultWindow.latest?.text.replacingOccurrences(of: "\n", with: " | ") ?? "nil")")
+                        if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
+                            try? data.write(to: url)
+                            Log.info("ocr screen captured")
+                        }
+                    }
+                }
+            }
+            return t
+        }
         if CommandLine.arguments.contains("--pin-test") {
             t.add("pin") {
                 // 演示模式下先铺一层示例桌面，避免抓到真实桌面内容
-                if CommandLine.arguments.contains("--demo") {
-                    let bg = NSWindow(contentRect: o.screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
-                    bg.level = .normal
-                    bg.isReleasedWhenClosed = false
-                    let iv = NSImageView(frame: CGRect(origin: .zero, size: o.screen.frame.size))
-                    iv.image = NSImage(cgImage: o.shot.image, size: o.screen.frame.size)
-                    iv.imageScaling = .scaleAxesIndependently
-                    bg.contentView = iv
-                    bg.orderFront(nil)
-                    SelfTest.demoBackdrop = bg
-                }
+                if CommandLine.arguments.contains("--demo") { SelfTest.showDemoBackdrop(for: o) }
                 o.debugAction(.pin)
                 if CommandLine.arguments.contains("--demo"), let pin = PinWindow.latest {
                     // 挪开一点，让钉住的图片和底下的示例桌面区分开

@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerHotKey()
         Log.info("启动 \(Bundle.main.bundlePath)，录屏权限=\(CGPreflightScreenCaptureAccess())")
         setupLaunchAtLoginDefault()
+        TextRecognizer.warmUp()
         // 首次启动时主动触发一次权限检查，避免第一次截图时才弹窗
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
