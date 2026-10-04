@@ -728,18 +728,21 @@ extension OverlayView {
 
     func debugMove(to p: CGPoint) { mouseMoved(with: mouseEvent(.mouseMoved, at: p)) }
 
+    /// 经过窗口的事件分发（含命中测试），和真实点击一致
+    private func send(_ e: NSEvent) { window?.sendEvent(e) }
+
     func debugClick(at p: CGPoint, clicks: Int = 1) {
-        mouseDown(with: mouseEvent(.leftMouseDown, at: p, clicks: clicks))
-        mouseUp(with: mouseEvent(.leftMouseUp, at: p, clicks: clicks))
+        send(mouseEvent(.leftMouseDown, at: p, clicks: clicks))
+        send(mouseEvent(.leftMouseUp, at: p, clicks: clicks))
     }
 
-    func debugRightClick(at p: CGPoint) { rightMouseDown(with: mouseEvent(.rightMouseDown, at: p)) }
+    func debugRightClick(at p: CGPoint) { send(mouseEvent(.rightMouseDown, at: p)) }
 
     func debugDrag(_ pts: [CGPoint]) {
         guard let first = pts.first, let last = pts.last else { return }
-        mouseDown(with: mouseEvent(.leftMouseDown, at: first))
-        for p in pts.dropFirst() { mouseDragged(with: mouseEvent(.leftMouseDragged, at: p)) }
-        mouseUp(with: mouseEvent(.leftMouseUp, at: last))
+        send(mouseEvent(.leftMouseDown, at: first))
+        for p in pts.dropFirst() { send(mouseEvent(.leftMouseDragged, at: p)) }
+        send(mouseEvent(.leftMouseUp, at: last))
     }
 
     func debugAction(_ a: ToolbarAction) { handle(a) }
@@ -890,6 +893,11 @@ final class SelfTest {
         }
         t.add("right-click-reset") { o.debugRightClick(at: c) }
         t.add("hover-after-reset") { o.debugMove(to: CGPoint(x: 60, y: 300)) }
+        t.add("click-fullscreen") {
+            o.debugClick(at: CGPoint(x: 60, y: 300))
+            if o.debugSelection != o.bounds { Log.info("❌ 点击整屏后未选中整屏: \(String(describing: o.debugSelection))") }
+        }
+        t.add("reset-again") { o.debugRightClick(at: CGPoint(x: 60, y: 300)); o.debugMove(to: CGPoint(x: 60, y: 300)) }
         t.add("drag-select") {
             o.debugDrag([CGPoint(x: 100, y: 200), CGPoint(x: 300, y: 350), CGPoint(x: 700, y: 620)])
         }

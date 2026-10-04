@@ -75,7 +75,8 @@ final class SizeLabelView: NSView {
         return frame.size
     }
 
-    override func mouseDown(with event: NSEvent) {}
+    /// 纯装饰，鼠标事件穿透到遮罩层
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     var debugText: String { label.stringValue }
     var debugLabelFrame: CGRect { label.frame }
@@ -116,7 +117,8 @@ final class GlassPanelView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func mouseDown(with event: NSEvent) {}
+    /// 纯装饰，鼠标事件穿透到遮罩层
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// 玻璃面板上的描边层
@@ -183,5 +185,6 @@ final class GlassFrameView: NSView {
         strips[3].frame = CGRect(x: b.width - t, y: 0, width: t, height: b.height)     // 右
     }
 
-    override func mouseDown(with event: NSEvent) {}
+    /// 纯装饰，鼠标事件穿透到遮罩层（否则会吞掉点击，导致无法选区）
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
