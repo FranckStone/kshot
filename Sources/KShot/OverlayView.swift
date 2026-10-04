@@ -67,7 +67,7 @@ final class OverlayView: NSView {
     private static let handleRadius: CGFloat = 7
     private static let handleHitSlop: CGFloat = 8
     /// 屏幕物理圆角（MacBook 刘海屏约 12pt；外接直角屏幕上圆角也无伤大雅）
-    private static let screenCornerRadius: CGFloat = 12
+    private static let screenCornerRadius: CGFloat = 20
     /// macOS 窗口圆角
     private static let windowCornerRadius: CGFloat = 10
 
