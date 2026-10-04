@@ -54,9 +54,9 @@ final class OverlayView: NSView {
     private let toolbar = ToolbarView()
     private let options = OptionsView()
     private let sizeLabel = SizeLabelView()
-    private let hoverFrame = GlassFrameView(tint: NSColor.wechatGreen.withAlphaComponent(0.45))
+    private let hoverFrame = GlassFrameView(tint: NSColor.accentGreen.withAlphaComponent(0.45))
     private let handleViews: [GlassPanelView] = Handle.all.map { _ in
-        GlassPanelView(cornerRadius: OverlayView.handleRadius, tint: NSColor.wechatGreen.withAlphaComponent(0.7), ringColor: .white, ringWidth: 1.5)
+        GlassPanelView(cornerRadius: OverlayView.handleRadius, tint: NSColor.accentGreen.withAlphaComponent(0.7), ringColor: .white, ringWidth: 1.5)
     }
     private var textEditor: TextEditorView?
     private var textGlass: GlassPanelView?
@@ -164,7 +164,7 @@ final class OverlayView: NSView {
 
         // 4. 边框（悬停状态用玻璃框子视图，选区用细线）
         if selection != nil {
-            ctx.setStrokeColor(NSColor.wechatGreen.cgColor)
+            ctx.setStrokeColor(NSColor.accentGreen.cgColor)
             ctx.setLineWidth(1.5)
             ctx.stroke(cut.insetBy(dx: -0.75, dy: -0.75))
         }
@@ -426,7 +426,7 @@ final class OverlayView: NSView {
             return
         }
         if selection != nil {
-            // 回到悬停识别状态（与微信一致）
+            // 回到悬停识别状态
             selection = nil
             annotations.removeAll()
             current = nil
@@ -896,7 +896,7 @@ final class SelfTest {
         t.add("text-begin") {
             guard let s = o.debugSelection else { return }
             o.debugClick(at: CGPoint(x: s.minX + 60, y: s.maxY - 220))
-            o.debugTypeText("微信风格截图 KShot")
+            o.debugTypeText("KShot 截图标注")
         }
         t.add("text-commit") { o.debugCommitText() }
         t.add("undo") { o.debugAction(.undo) }

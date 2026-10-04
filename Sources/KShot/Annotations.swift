@@ -41,7 +41,7 @@ enum StrokeSize: Int, CaseIterable {
     }
 }
 
-/// 微信风格的调色板
+/// 标注调色板
 enum Palette {
     static let colors: [NSColor] = [
         NSColor(hex: 0xFA5151), // 红

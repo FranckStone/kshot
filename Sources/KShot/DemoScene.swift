@@ -52,7 +52,7 @@ enum DemoScene {
         for (i, name) in ["收件箱", "已加星标", "草稿", "已发送", "归档", "垃圾桶"].enumerated() {
             let y = win.minY + 72 + CGFloat(i) * 34
             if i == 0 {
-                NSColor.wechatGreen.withAlphaComponent(0.18).setFill()
+                NSColor.accentGreen.withAlphaComponent(0.18).setFill()
                 NSBezierPath(roundedRect: CGRect(x: win.minX + 10, y: y - 6, width: 180, height: 28), xRadius: 6, yRadius: 6).fill()
             }
             NSAttributedString(string: name, attributes: itemAttrs).draw(at: CGPoint(x: win.minX + 24, y: y))

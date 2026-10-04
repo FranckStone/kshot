@@ -66,6 +66,6 @@ extension NSColor {
                   alpha: alpha)
     }
 
-    /// 微信绿
-    static let wechatGreen = NSColor(hex: 0x07C160)
+    /// 主题绿
+    static let accentGreen = NSColor(hex: 0x07C160)
 }

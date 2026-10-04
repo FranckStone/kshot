@@ -100,7 +100,7 @@ final class ToolButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let capsule = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
         if role == .prominent || isActiveTool {
-            NSColor.wechatGreen.setFill()
+            NSColor.accentGreen.setFill()
             capsule.fill()
             if hovered {
                 NSColor.white.withAlphaComponent(0.15).setFill()
@@ -289,7 +289,7 @@ final class OptionsContentView: NSView {
         for (i, s) in StrokeSize.allCases.enumerated() {
             let r = o.sizeRect(i)
             if s == o.size {
-                NSColor.wechatGreen.setFill()
+                NSColor.accentGreen.setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1), xRadius: r.height / 2, yRadius: r.height / 2).fill()
             }
             let d = s.dotDiameter

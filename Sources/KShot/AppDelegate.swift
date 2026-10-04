@@ -55,14 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    // MARK: - 全局快捷键 ⌃⌘A（与微信一致）
+    // MARK: - 全局快捷键 ⌃⌘A
 
     private func registerHotKey() {
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(controlKey | cmdKey)) { [weak self] in
             self?.takeScreenshot()
         }
         if hotKey == nil {
-            Log.info("注册快捷键 ⌃⌘A 失败，可能被其他应用（如微信）占用")
+            Log.info("注册快捷键 ⌃⌘A 失败，可能被其他应用占用")
         } else {
             Log.info("快捷键 ⌃⌘A 注册成功")
         }
