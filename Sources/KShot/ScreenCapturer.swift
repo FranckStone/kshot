@@ -56,24 +56,35 @@ enum ScreenCapturer {
         return shots
     }
 
-    /// 只抓取某块屏幕上的一个局部区域（局部坐标：左上原点、pt），可排除自己的窗口。
+}
+
+/// 反复抓取同一块区域的抓屏器：过滤器与配置只建一次，每帧只做一次截图调用。
+final class RegionCapturer: @unchecked Sendable {
+    private let filter: SCContentFilter
+    private let config: SCStreamConfiguration
+
+    /// localRect：屏幕局部坐标（左上原点、pt）；excludingWindowIDs：要排除的自家窗口
     @MainActor
-    static func captureRegion(screen: NSScreen, localRect: CGRect, excludingWindowIDs: Set<CGWindowID>) async throws -> CGImage {
+    init(screen: NSScreen, localRect: CGRect, excludingWindowIDs: Set<CGWindowID>) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw CaptureError.noDisplays
         }
         let excluded = content.windows.filter { excludingWindowIDs.contains($0.windowID) }
-        let filter = SCContentFilter(display: display, excludingWindows: excluded)
-        let config = SCStreamConfiguration()
+        filter = SCContentFilter(display: display, excludingWindows: excluded)
+        let c = SCStreamConfiguration()
         let scale = screen.backingScaleFactor
-        config.sourceRect = localRect
-        config.width = Int((localRect.width * scale).rounded())
-        config.height = Int((localRect.height * scale).rounded())
-        config.showsCursor = false
-        config.captureResolution = .best
-        config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.colorSpaceName = CGColorSpace.sRGB
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        c.sourceRect = localRect
+        c.width = Int((localRect.width * scale).rounded())
+        c.height = Int((localRect.height * scale).rounded())
+        c.showsCursor = false
+        c.captureResolution = .best
+        c.pixelFormat = kCVPixelFormatType_32BGRA
+        c.colorSpaceName = CGColorSpace.sRGB
+        config = c
+    }
+
+    func capture() async throws -> CGImage {
+        try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 }

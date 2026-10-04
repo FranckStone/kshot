@@ -35,6 +35,27 @@ enum Exporter {
         return ctx.makeImage()
     }
 
+    /// 对任意图片叠加标注（标注坐标为 pt，图片 pt 尺寸 = 像素 / scale）
+    static func render(image: CGImage, scale: CGFloat, annotations: [Annotation], renderer: AnnotationRenderer) -> CGImage? {
+        let pxW = image.width, pxH = image.height
+        guard let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.translateBy(x: 0, y: CGFloat(pxH))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.scaleBy(x: scale, y: scale)
+        let gc = NSGraphicsContext(cgContext: ctx, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = gc
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let size = CGSize(width: CGFloat(pxW) / scale, height: CGFloat(pxH) / scale)
+        ctx.interpolationQuality = .none
+        NSImage(cgImage: image, size: size).draw(in: CGRect(origin: .zero, size: size), from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        ctx.interpolationQuality = .high
+        renderer.draw(annotations, clip: CGRect(origin: .zero, size: size), in: ctx)
+        return ctx.makeImage()
+    }
+
     static func pngData(_ image: CGImage) -> Data? {
         let rep = NSBitmapImageRep(cgImage: image)
         return rep.representation(using: .png, properties: [:])

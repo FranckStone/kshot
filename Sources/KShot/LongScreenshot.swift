@@ -22,8 +22,10 @@ final class LongScreenshotSession {
     /// 调试：完成回调
     var onFinish: ((CGImage) -> Void)?
 
-    /// 每次滚动的距离（pt），取区域高度的一半，保证帧间有足够重叠
-    private var scrollStep: CGFloat { (region.height * 0.5).rounded() }
+    private var capturer: RegionCapturer?
+
+    /// 每次滚动的距离（pt），取区域高度的 45%，保证帧间有足够重叠
+    private var scrollStep: CGFloat { (region.height * 0.45).rounded() }
 
     init(screen: NSScreen, region: CGRect, forceAuto: Bool = false) {
         self.screen = screen
@@ -53,22 +55,28 @@ final class LongScreenshotSession {
     }
 
     private func loop() async {
+        do {
+            capturer = try await RegionCapturer(screen: screen, localRect: region, excludingWindowIDs: excluded)
+        } catch {
+            fail("抓屏失败：\(error.localizedDescription)")
+            return
+        }
         // 第一帧
-        guard let first = await capture() else { fail("抓屏失败"); return }
-        _ = stitcher.push(first)
+        guard let first = await settledFrame() else { fail("抓屏失败"); return }
+        _ = stitcher.push(frame: first)
         frames = 1
         panel.setProgress(frames: frames, height: stitcher.totalHeight)
 
         while running {
             if autoScroll {
                 postScroll()
-                try? await Task.sleep(for: .milliseconds(450))
+                try? await Task.sleep(for: .milliseconds(120))
             } else {
-                try? await Task.sleep(for: .milliseconds(350))
+                try? await Task.sleep(for: .milliseconds(250))
             }
-            guard running, let img = await capture() else { continue }
+            guard running, let frame = await settledFrame() else { continue }
             let expected = Int(scrollStep * screen.backingScaleFactor)
-            switch stitcher.push(img, expectedShift: autoScroll ? expected : 0) {
+            switch stitcher.push(frame: frame, expectedShift: autoScroll ? expected : 0) {
             case .appended(let rows):
                 frames += 1
                 staticCount = 0
@@ -90,11 +98,24 @@ final class LongScreenshotSession {
     /// 每帧忽略底部的几个像素：区域贴着窗口底边时，窗口圆角/阴影会在每个接缝处留下痕迹
     private static let bottomTrimPx = 26
 
-    private func capture() async -> CGImage? {
-        guard let img = try? await ScreenCapturer.captureRegion(screen: screen, localRect: region, excludingWindowIDs: excluded) else { return nil }
+    /// 抓一帧并在后台算好行签名
+    private func captureFrame() async -> ImageStitcher.Frame? {
+        guard let capturer, let raw = try? await capturer.capture() else { return nil }
         let trim = Self.bottomTrimPx
-        guard img.height > trim * 4 else { return img }
-        return img.cropping(to: CGRect(x: 0, y: 0, width: img.width, height: img.height - trim))
+        let img = raw.height > trim * 4 ? (raw.cropping(to: CGRect(x: 0, y: 0, width: raw.width, height: raw.height - trim)) ?? raw) : raw
+        return await Task.detached(priority: .userInitiated) { ImageStitcher.makeFrame(img) }.value
+    }
+
+    /// 连续抓帧直到画面静止（滚动动画结束），最多等约 1.2 秒
+    private func settledFrame() async -> ImageStitcher.Frame? {
+        guard var last = await captureFrame() else { return nil }
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(90))
+            guard running, let next = await captureFrame() else { return last }
+            if ImageStitcher.isSame(last, next) { return next }
+            last = next
+        }
+        return last
     }
 
     /// 向区域中心发送向下滚动的滚轮事件
@@ -103,6 +124,8 @@ final class LongScreenshotSession {
         let center = screen.cgPoint(fromLocal: region.center)
         let amount = Int32(scrollStep)
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -amount, wheel2: 0, wheel3: 0) else { return }
+        // 标记为连续（触控板式）像素滚动，应用会精确按像素量滚动而不是加速
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
         event.location = center
         event.post(tap: .cghidEventTap)
     }
@@ -116,7 +139,7 @@ final class LongScreenshotSession {
         if let debugOutputURL, let data = Exporter.pngData(image) { try? data.write(to: debugOutputURL) }
         onFinish?(image)
         Exporter.copyToClipboard(image)
-        let win = LongShotResultWindow(image: image, screen: screen)
+        let win = ImageEditorWindow(image: image, scale: screen.backingScaleFactor, screen: screen, title: "长截图")
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         Log.info("longshot done: \(image.width)x\(image.height), frames=\(frames)")
@@ -223,95 +246,5 @@ final class LongShotPanel: NSWindow {
         case 36, 76: onFinish?()
         default: super.keyDown(with: event)
         }
-    }
-}
-
-/// 长截图结果窗口：可滚动预览 + 复制 / 保存 / 钉住 / 关闭
-final class LongShotResultWindow: NSWindow {
-    private let cgImage: CGImage
-    nonisolated(unsafe) private static var all: [LongShotResultWindow] = []
-
-    init(image: CGImage, screen: NSScreen) {
-        cgImage = image
-        let scale = screen.backingScaleFactor
-        let imgPt = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
-        let v = screen.visibleFrame
-        let width = min(imgPt.width + 40, v.width * 0.85)
-        let height = min(imgPt.height + 96, v.height * 0.88)
-        let size = NSSize(width: width, height: height)
-        let origin = CGPoint(x: v.midX - width / 2, y: v.midY - height / 2)
-        super.init(contentRect: CGRect(origin: origin, size: size), styleMask: .borderless, backing: .buffered, defer: false)
-        level = .floating
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = true
-        isMovableByWindowBackground = true
-        isReleasedWhenClosed = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        let root = NSView(frame: CGRect(origin: .zero, size: size))
-        root.wantsLayer = true
-        let content = NSView(frame: root.bounds)
-        let backdrop = GlassBackdrop.make(cornerRadius: 18, content: content)
-        backdrop.frame = root.bounds
-        root.addSubview(backdrop)
-        contentView = root
-
-        let title = NSTextField(labelWithString: "长截图  \(image.width) × \(image.height)")
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
-        title.frame = CGRect(x: 20, y: size.height - 36, width: 400, height: 20)
-        content.addSubview(title)
-
-        let scroll = NSScrollView(frame: CGRect(x: 16, y: 52, width: size.width - 32, height: size.height - 100))
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = 10
-        scroll.layer?.masksToBounds = true
-        let imageView = NSImageView(frame: CGRect(x: 0, y: 0, width: scroll.contentSize.width, height: imgPt.height * (scroll.contentSize.width / imgPt.width)))
-        imageView.image = NSImage(cgImage: image, size: imgPt)
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignTop
-        scroll.documentView = imageView
-        content.addSubview(scroll)
-
-        func button(_ title: String, _ action: Selector, x: CGFloat, width: CGFloat = 76) -> NSButton {
-            let b = NSButton(title: title, target: self, action: action)
-            b.bezelStyle = .rounded
-            b.frame = CGRect(x: x, y: 12, width: width, height: 28)
-            content.addSubview(b)
-            return b
-        }
-        let close = button("关闭", #selector(closeWindow), x: size.width - 268)
-        close.keyEquivalent = "\u{1b}"
-        _ = button("保存…", #selector(save), x: size.width - 184)
-        let copy = button("复制", #selector(copyImage), x: size.width - 100)
-        copy.keyEquivalent = "\r"
-        if #available(macOS 26.0, *) { copy.bezelColor = .accentGreen }
-
-        let hint = NSTextField(labelWithString: "已复制到剪贴板 · ⏎ 再次复制 · ⌘S 保存 · Esc 关闭")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .tertiaryLabelColor
-        hint.frame = CGRect(x: 20, y: 17, width: 340, height: 16)
-        content.addSubview(hint)
-
-        LongShotResultWindow.all.append(self)
-    }
-
-    override var canBecomeKey: Bool { true }
-
-    @objc private func copyImage() { Exporter.copyToClipboard(cgImage) }
-    @objc private func save() { Exporter.save(cgImage) { _ in } }
-    @objc private func closeWindow() {
-        orderOut(nil)
-        LongShotResultWindow.all.removeAll { $0 === self }
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { closeWindow(); return }
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "s" { save(); return }
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "c" { copyImage(); return }
-        super.keyDown(with: event)
     }
 }

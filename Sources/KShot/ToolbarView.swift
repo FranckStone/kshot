@@ -141,6 +141,8 @@ final class ToolbarView: NSView {
     static let padding: CGFloat = 6
     static let height: CGFloat = buttonSize + padding * 2
 
+    enum Mode { case screen, editor }
+
     var onAction: ((ToolbarAction) -> Void)?
 
     private var toolButtons: [Tool: ToolButton] = [:]
@@ -157,7 +159,7 @@ final class ToolbarView: NSView {
 
     override var isFlipped: Bool { true }
 
-    init() {
+    init(mode: Mode = .screen) {
         super.init(frame: .zero)
         wantsLayer = true
 
@@ -180,8 +182,10 @@ final class ToolbarView: NSView {
         separatorsAfter.insert(items.count - 1)
         add(.undo, "arrow.uturn.backward", "撤销  ⌘Z")
         undoButton = items.last!.button
-        add(.pin, "pin", "钉在屏幕上  ⌘P")
-        add(.longShot, "rectangle.expand.vertical", fallback: "arrow.up.and.down", "长截图（滚动截图）  ⌘K")
+        if mode == .screen {
+            add(.pin, "pin", "钉在屏幕上  ⌘P")
+            add(.longShot, "rectangle.expand.vertical", fallback: "arrow.up.and.down", "长截图（滚动截图）  ⌘K")
+        }
         add(.save, "square.and.arrow.down", "保存  ⌘S")
         separatorsAfter.insert(items.count - 1)
         add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字  ⌘T")

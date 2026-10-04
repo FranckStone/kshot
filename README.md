@@ -38,7 +38,11 @@
 
 ![钉在屏幕上](docs/screenshot-pin.png)
 
-“长截图”对选区自动滚动并拼接成一张长图（下图为对 2600pt 高的示例内容自动滚动 10 屏拼接的结果，缩放显示）：
+“长截图”对选区自动滚动并拼接成一张长图，完成后在编辑窗口里继续标注（工具与截图时一致）：
+
+![长截图编辑](docs/screenshot-longshot-editor.png)
+
+拼接结果示例（对 2600pt 高的示例内容自动滚动 11 屏拼接，与真值逐像素比对一致，缩放显示）：
 
 ![长截图](docs/screenshot-longshot-full.png)
 
@@ -73,7 +77,7 @@
 | `⏎` / 双击选区 / ⌘C | 完成，图片复制到剪贴板 |
 | `⌘S` | 保存为 PNG |
 | `⌘P` | 钉在屏幕上（悬浮图片：拖动移动、滚轮缩放、双击或 Esc 关闭、右键菜单） |
-| `⌘K` | 长截图（滚动截图）：自动向选区发送滚轮事件、逐帧抓取并按重叠部分拼接，滚到底自动停止；需要“辅助功能”权限，未授权时可手动滚动，结果自动复制并在可滚动窗口中预览 |
+| `⌘K` | 长截图（滚动截图）：自动向选区发送滚轮事件，每次滚动后等画面静止再抓帧，按重叠部分拼接，滚到底自动停止；需要“辅助功能”权限，未授权时可手动滚动。完成后进入图片编辑窗口，可继续标注、提取文字、翻译，再复制或保存 |
 | `⌘T` | 提取文字：对选区做中英文 OCR，结果自动复制到剪贴板并弹出可编辑的结果窗口 |
 | `⌘L` | 翻译：识别选区文字后用系统翻译译成所选语言（中文译英、其他译中，可在结果窗口切换目标语言；macOS 15+，首次需按系统提示下载语言包） |
 | `⌘Z` | 撤销上一步标注 |
@@ -117,7 +121,8 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
 - `Translator.swift` 基于系统 Translation 框架的翻译器（通过隐藏的 SwiftUI 宿主视图驱动）
-- `LongScreenshot.swift` / `ImageStitcher.swift` 长截图会话（自动滚动、控制面板、结果窗口）与帧间拼接算法
+- `LongScreenshot.swift` / `ImageStitcher.swift` 长截图会话（自动滚动、等待画面静止、控制面板）与帧间拼接算法
+- `ImageEditorWindow.swift` 图片编辑窗口（长截图完成后的标注画布，复用工具条与标注渲染）
 - `MenuBarIcon.swift` 菜单栏模板图标
 - `DemoScene.swift` 演示模式的示例桌面
 - `tools/make-icon.swift` App 图标生成脚本（含多种备选风格）

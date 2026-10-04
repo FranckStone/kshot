@@ -31,6 +31,16 @@ final class ImageStitcher {
     /// 喂入一帧。expectedShift：预期滚动的像素数（用于在多个候选里取舍），0 表示未知。
     func push(_ image: CGImage, expectedShift: Int = 0) -> Outcome {
         guard let frame = Self.makeFrame(image) else { return .noMatch }
+        return push(frame: frame, expectedShift: expectedShift)
+    }
+
+    /// 两帧是否几乎相同（用于判断滚动动画是否已静止）
+    static func isSame(_ a: Frame, _ b: Frame) -> Bool {
+        a.width == b.width && a.height == b.height && meanDiff(a.rows, b.rows, shift: 0, step: 3) < 1.5
+    }
+
+    func push(frame: Frame, expectedShift: Int = 0) -> Outcome {
+        let image = frame.image
         defer { previous = frame }
         guard let prev = previous else {
             strips = [image]

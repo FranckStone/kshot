@@ -4,6 +4,7 @@ import AppKit
 @MainActor
 enum LongShotDemo {
     nonisolated(unsafe) static var window: NSWindow?
+    nonisolated(unsafe) static var backdrop: NSWindow?
 
     static func run() {
         guard let screen = NSScreen.screens.first else { return }
@@ -56,6 +57,34 @@ enum LongShotDemo {
                 }
                 Log.info(String(format: "longshot-demo verify: result %dx%d truth %dx%d meanDiff=%.3f worstRow=%d (rowDiff=%d)",
                                 result.width, result.height, truth.width, truth.height, Double(total) / Double(max(1, n)), worstRow, worst))
+                // 在编辑器里画几笔，然后抓屏看看效果
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    guard let editor = ImageEditorWindow.latest else { return }
+                    editor.debugHandle(.tool(.rect))
+                    editor.debugCanvas.debugDrag([CGPoint(x: 40, y: 60), CGPoint(x: 200, y: 120), CGPoint(x: 320, y: 180)])
+                    editor.debugHandle(.tool(.arrow))
+                    editor.debugCanvas.debugDrag([CGPoint(x: 400, y: 300), CGPoint(x: 500, y: 200), CGPoint(x: 600, y: 90)])
+                    editor.debugHandle(.tool(.mosaic))
+                    editor.debugCanvas.debugDrag([CGPoint(x: 60, y: 260), CGPoint(x: 200, y: 270), CGPoint(x: 360, y: 280)])
+                    // 中性背景，避免抓屏带上真实桌面
+                    let bg = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                    bg.level = .normal
+                    bg.isReleasedWhenClosed = false
+                    bg.backgroundColor = NSColor(hex: 0x2C4A6B)
+                    bg.orderFront(nil)
+                    window?.orderOut(nil)
+                    backdrop = bg
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(500))
+                        if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
+                            try? data.write(to: dir.appendingPathComponent("editor.png"))
+                        }
+                        if let out = editor.debugCanvas.export(), let data = Exporter.pngData(out) {
+                            try? data.write(to: dir.appendingPathComponent("editor-export.png"))
+                        }
+                        Log.info("longshot-demo editor captured")
+                    }
+                }
             }
             session.start()
         }
