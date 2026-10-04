@@ -669,21 +669,27 @@ final class OverlayView: NSView {
         let gap: CGFloat = 8
         let optionsExtra: CGFloat = options.isHidden ? 0 : OptionsView.height + 6
         var tf = toolbar.frame
-        tf.origin.x = min(max(bounds.minX + 4, sel.maxX - tf.width), bounds.maxX - tf.width - 4)
-        var below = true
-        if sel.maxY + gap + tf.height + optionsExtra <= bounds.maxY - 4 {
-            tf.origin.y = sel.maxY + gap
-        } else if sel.minY - gap - tf.height - optionsExtra >= bounds.minY + 4 {
-            tf.origin.y = sel.minY - gap - tf.height
-            below = false
-        } else {
-            tf.origin.y = sel.maxY - gap - tf.height - optionsExtra
-        }
-        toolbar.frame = tf
-
         var of = options.frame
-        of.origin.x = min(max(bounds.minX + 4, tf.maxX - of.width), bounds.maxX - of.width - 4)
-        of.origin.y = below ? tf.maxY + 6 : tf.minY - 6 - of.height
+        if sel.maxY + gap + tf.height + optionsExtra <= bounds.maxY - 4 {
+            // 1. 选区下方，右对齐；选项面板在工具条下方
+            tf.origin.x = min(max(bounds.minX + 4, sel.maxX - tf.width), bounds.maxX - tf.width - 4)
+            tf.origin.y = sel.maxY + gap
+            of.origin.y = tf.maxY + 6
+        } else if sel.minY - gap - tf.height - optionsExtra >= bounds.minY + 4 {
+            // 2. 选区上方，右对齐；选项面板在工具条上方
+            tf.origin.x = min(max(bounds.minX + 4, sel.maxX - tf.width), bounds.maxX - tf.width - 4)
+            tf.origin.y = sel.minY - gap - tf.height
+            of.origin.y = tf.minY - 6 - of.height
+        } else {
+            // 3. 选区内部（整屏 / 接近整屏）：水平居中贴近底部，选项面板在工具条上方，更显眼
+            let bottomMargin: CGFloat = 28
+            tf.origin.x = sel.midX - tf.width / 2
+            tf.origin.y = sel.maxY - bottomMargin - tf.height
+            of.origin.y = tf.minY - 6 - of.height
+        }
+        tf.origin.x = min(max(bounds.minX + 4, tf.origin.x), bounds.maxX - tf.width - 4)
+        toolbar.frame = tf
+        of.origin.x = min(max(bounds.minX + 4, tf.midX - of.width / 2), bounds.maxX - of.width - 4)
         options.frame = of
         toolbar.needsDisplay = true
         options.needsDisplay = true
@@ -903,6 +909,7 @@ final class SelfTest {
         t.add("click-fullscreen") {
             o.debugClick(at: CGPoint(x: 60, y: 300))
             if o.debugSelection != o.bounds { Log.info("❌ 点击整屏后未选中整屏: \(String(describing: o.debugSelection))") }
+            o.debugAction(.tool(.rect))
         }
         t.add("reset-again") { o.debugRightClick(at: CGPoint(x: 60, y: 300)); o.debugMove(to: CGPoint(x: 60, y: 300)) }
         t.add("drag-select") {
