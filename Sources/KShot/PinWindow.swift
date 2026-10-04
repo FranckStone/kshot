@@ -9,6 +9,7 @@ final class PinWindow: NSWindow {
     private let baseSize: CGSize
 
     nonisolated(unsafe) private static var all: [PinWindow] = []
+    nonisolated(unsafe) static weak var latest: PinWindow?
 
     /// imageFrame：图片在屏幕上的位置；窗口会向外扩出一圈玻璃边框
     init(image: CGImage, frame imageFrame: CGRect) {
@@ -29,6 +30,7 @@ final class PinWindow: NSWindow {
         view.onDoubleClick = { [weak self] in self?.closePin() }
         contentView = view
         PinWindow.all.append(self)
+        PinWindow.latest = self
     }
 
     override var canBecomeKey: Bool { true }

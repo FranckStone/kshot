@@ -741,6 +741,7 @@ extension OverlayView {
 
 @MainActor
 final class SelfTest {
+    static var demoBackdrop: NSWindow?
     private var steps: [(String, () -> Void)] = []
     let dir: URL
     private var index = 0
@@ -857,7 +858,23 @@ final class SelfTest {
         t.add("nudge-right") { o.debugKey(code: 124, chars: "") }
         if CommandLine.arguments.contains("--pin-test") {
             t.add("pin") {
+                // 演示模式下先铺一层示例桌面，避免抓到真实桌面内容
+                if CommandLine.arguments.contains("--demo") {
+                    let bg = NSWindow(contentRect: o.screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                    bg.level = .normal
+                    bg.isReleasedWhenClosed = false
+                    let iv = NSImageView(frame: CGRect(origin: .zero, size: o.screen.frame.size))
+                    iv.image = NSImage(cgImage: o.shot.image, size: o.screen.frame.size)
+                    iv.imageScaling = .scaleAxesIndependently
+                    bg.contentView = iv
+                    bg.orderFront(nil)
+                    SelfTest.demoBackdrop = bg
+                }
                 o.debugAction(.pin)
+                if CommandLine.arguments.contains("--demo"), let pin = PinWindow.latest {
+                    // 挪开一点，让钉住的图片和底下的示例桌面区分开
+                    pin.setFrameOrigin(CGPoint(x: pin.frame.minX + 260, y: pin.frame.minY - 140))
+                }
                 let url = t.dir.appendingPathComponent("screen.png")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     Task { @MainActor in

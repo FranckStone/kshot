@@ -8,6 +8,8 @@
 
 ## 截图
 
+界面上的浮层（工具条、粗细 / 颜色面板、尺寸标签、文字输入框、钉住窗口）均为 macOS 26 的 Liquid Glass 液态玻璃风格，旧系统自动回退为毛玻璃。
+
 鼠标悬停自动识别窗口，左上角显示像素尺寸：
 
 ![窗口识别](docs/screenshot-hover.png)
@@ -15,6 +17,14 @@
 选区下方的工具条与粗细 / 颜色面板，支持矩形、椭圆、箭头、画笔、马赛克、文字：
 
 ![标注](docs/screenshot-annotate.png)
+
+文字标注就地输入，输入框是会随内容伸缩的玻璃面板：
+
+![文字标注](docs/screenshot-text.png)
+
+“钉在屏幕上”把截图变成带玻璃边框的悬浮卡片，可拖动、滚轮缩放、双击关闭：
+
+![钉在屏幕上](docs/screenshot-pin.png)
 
 ## 构建与运行
 
@@ -56,6 +66,8 @@ open build/KShot.app --args --shoot      # 启动后立即截图
 open build/KShot.app --args --shoot --selftest   # 自动跑完整交互脚本，截图存到 ~/Library/Logs/KShot-selftest/
 open build/KShot.app --args --shoot --dump       # 每秒把遮罩渲染到 ~/Library/Logs/KShot-overlay.png
 open build/KShot.app --args --shoot --demo --selftest   # 用绘制的示例桌面代替真实抓屏，生成不含隐私的演示截图
+open build/KShot.app --args --shoot --demo --selftest --pause-at 18   # 停在第 18 步并用 ScreenCaptureKit 抓一张真实合成的屏幕（含玻璃效果）
+open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后一步改为“钉住”并抓屏
 ```
 
 安装到“应用程序”并开机自启：`./install.sh`（首次从 /Applications 启动时自动注册登录项，可在菜单里关闭）。
