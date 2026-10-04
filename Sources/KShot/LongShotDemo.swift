@@ -44,7 +44,7 @@ enum LongShotDemo {
             session.customScroller = { step in scrollBy(step) }
             if manual {
                 // 模拟人手滚动：步长不一、偶尔往回滚、速度忽快忽慢，滚到底后按“完成”
-                let steps: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 260, 110, -40, 180, 90, 240, 300, 120, 160, 80, 200, 150, 100, 90, 60]
+                let steps: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 220, 110, -40, 180, 90, 200, 220, 120, 160, 80, 200, 150, 100, 90, 60, 120, 150, 100]
                 var i = 0
                 @MainActor func next() {
                     guard i < steps.count else {
@@ -52,7 +52,7 @@ enum LongShotDemo {
                         return
                     }
                     scrollBy(steps[i]); i += 1
-                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int.random(in: 90...260))) { MainActor.assumeIsolated { next() } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int.random(in: 120...260))) { MainActor.assumeIsolated { next() } }
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { MainActor.assumeIsolated { next() } }
             }

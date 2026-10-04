@@ -93,7 +93,8 @@ final class LongScreenshotSession {
                 postScroll()
                 try? await Task.sleep(for: .milliseconds(160))
             } else {
-                try? await Task.sleep(for: .milliseconds(70))
+                // 手动模式尽量高帧率，快速滑动也能接上
+                try? await Task.sleep(for: .milliseconds(30))
             }
             guard running, let frame = await captureFrame() else { continue }
             let expected = autoScroll ? Int(scrollStep * screen.backingScaleFactor) : 0
