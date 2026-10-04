@@ -79,3 +79,18 @@ final class SizeLabelView: NSView {
     var debugText: String { label.stringValue }
     var debugLabelFrame: CGRect { label.frame }
 }
+
+/// 通用玻璃面板（无内容，仅作背板）
+final class GlassPanelView: NSView {
+    init(cornerRadius: CGFloat) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        let backdrop = GlassBackdrop.make(cornerRadius: cornerRadius, content: NSView())
+        backdrop.frame = bounds
+        addSubview(backdrop)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func mouseDown(with event: NSEvent) {}
+}

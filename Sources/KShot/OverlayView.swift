@@ -55,6 +55,8 @@ final class OverlayView: NSView {
     private let options = OptionsView()
     private let sizeLabel = SizeLabelView()
     private var textEditor: TextEditorView?
+    private var textGlass: GlassPanelView?
+    private static let textGlassInset = CGSize(width: 8, height: 5)
 
     private static let dimAlpha: CGFloat = 0.42
     private static let handleRadius: CGFloat = 4
@@ -107,7 +109,9 @@ final class OverlayView: NSView {
 
     func tearDown() {
         textEditor?.removeFromSuperview()
+        textGlass?.removeFromSuperview()
         textEditor = nil
+        textGlass = nil
     }
 
     // MARK: - 绘制
@@ -549,8 +553,15 @@ final class OverlayView: NSView {
         origin.y = min(max(sel.minY, origin.y), sel.maxY - fontSize)
         let editor = TextEditorView(origin: origin, color: color, fontSize: fontSize)
         editor.onCommit = { [weak self] in self?.commitText() }
+        let glass = GlassPanelView(cornerRadius: 10)
+        glass.frame = editor.frame.insetBy(dx: -OverlayView.textGlassInset.width, dy: -OverlayView.textGlassInset.height)
+        editor.onFrameChange = { [weak glass] f in
+            glass?.frame = f.insetBy(dx: -OverlayView.textGlassInset.width, dy: -OverlayView.textGlassInset.height)
+        }
+        addSubview(glass)
         addSubview(editor)
         textEditor = editor
+        textGlass = glass
         window?.makeFirstResponder(editor)
         needsDisplay = true
     }
@@ -561,7 +572,9 @@ final class OverlayView: NSView {
                            color: editor.strokeColor, size: strokeSize)
         if !a.isDegenerate { annotations.append(a) }
         editor.removeFromSuperview()
+        textGlass?.removeFromSuperview()
         textEditor = nil
+        textGlass = nil
         window?.makeFirstResponder(self)
         updateToolbarState()
         needsDisplay = true

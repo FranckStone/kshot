@@ -3,11 +3,12 @@ import AppKit
 /// 文字标注的就地编辑器：Esc / ⌘⏎ / 点击别处 结束编辑
 final class TextEditorView: NSTextView {
     var onCommit: (() -> Void)?
+    /// 尺寸随内容变化时回调（用于同步底下的玻璃面板）
+    var onFrameChange: ((CGRect) -> Void)?
     var strokeColor: NSColor = Palette.colors[0] {
         didSet {
             textColor = strokeColor
             insertionPointColor = strokeColor
-            layer?.borderColor = strokeColor.withAlphaComponent(0.8).cgColor
         }
     }
     var fontSize: CGFloat = 20 {
@@ -39,9 +40,6 @@ final class TextEditorView: NSTextView {
         textContainerInset = Annotation.textInset
         isVerticallyResizable = false
         isHorizontallyResizable = false
-        wantsLayer = true
-        layer?.borderWidth = 1
-        layer?.cornerRadius = 2
 
         self.fontSize = fontSize
         self.strokeColor = color
@@ -59,6 +57,7 @@ final class TextEditorView: NSTextView {
         let w = max(minW, ceil(used.width)) + textContainerInset.width * 2 + 2
         let h = max(fontSize * 1.3, ceil(used.height)) + textContainerInset.height * 2
         frame.size = CGSize(width: w, height: h)
+        onFrameChange?(frame)
     }
 
     override func didChangeText() {
