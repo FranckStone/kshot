@@ -1,0 +1,71 @@
+import AppKit
+
+extension NSScreen {
+    var displayID: CGDirectDisplayID {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return (deviceDescription[key] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    /// 主屏（带菜单栏）的高度，用于 Cocoa ⇄ CG 坐标转换。
+    static var primaryHeight: CGFloat {
+        NSScreen.screens.first?.frame.height ?? 0
+    }
+
+    /// 本屏左上角在全局 CG 坐标系（原点为主屏左上角，y 向下）中的位置。
+    var cgOrigin: CGPoint {
+        CGPoint(x: frame.minX, y: NSScreen.primaryHeight - frame.maxY)
+    }
+
+    /// 全局 CG 矩形 → 本屏局部坐标（左上角原点，y 向下）。
+    func localRect(fromCG rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX - cgOrigin.x, y: rect.minY - cgOrigin.y, width: rect.width, height: rect.height)
+    }
+
+    /// 本屏局部坐标 → 全局 CG 坐标。
+    func cgPoint(fromLocal p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x + cgOrigin.x, y: p.y + cgOrigin.y)
+    }
+
+    /// 本屏局部矩形（左上原点）→ Cocoa 屏幕坐标矩形（左下原点）。
+    func cocoaRect(fromLocal r: CGRect) -> CGRect {
+        CGRect(x: frame.minX + r.minX, y: frame.maxY - r.maxY, width: r.width, height: r.height)
+    }
+}
+
+extension CGRect {
+    /// 由任意两点构成的标准化矩形。
+    init(p1: CGPoint, p2: CGPoint) {
+        self.init(x: min(p1.x, p2.x), y: min(p1.y, p2.y), width: abs(p2.x - p1.x), height: abs(p2.y - p1.y))
+    }
+
+    func clamped(to bounds: CGRect) -> CGRect {
+        var r = self
+        r.size.width = min(r.width, bounds.width)
+        r.size.height = min(r.height, bounds.height)
+        r.origin.x = max(bounds.minX, min(r.minX, bounds.maxX - r.width))
+        r.origin.y = max(bounds.minY, min(r.minY, bounds.maxY - r.height))
+        return r
+    }
+
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
+}
+
+extension CGPoint {
+    func clamped(to rect: CGRect) -> CGPoint {
+        CGPoint(x: max(rect.minX, min(x, rect.maxX)), y: max(rect.minY, min(y, rect.maxY)))
+    }
+
+    func distance(to p: CGPoint) -> CGFloat { hypot(p.x - x, p.y - y) }
+}
+
+extension NSColor {
+    convenience init(hex: UInt32, alpha: CGFloat = 1) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+                  green: CGFloat((hex >> 8) & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255,
+                  alpha: alpha)
+    }
+
+    /// 微信绿
+    static let wechatGreen = NSColor(hex: 0x07C160)
+}
