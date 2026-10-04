@@ -60,25 +60,23 @@ final class ToolButton: NSButton {
         return img
     }
 
-    /// 马赛克图标：4×4 深浅交错的像素块
+    /// 马赛克图标：3×3 深浅交错的像素块（视觉尺寸与 SF Symbol 图标一致）
     static func mosaicIcon() -> NSImage {
-        let size = NSSize(width: 18, height: 18)
+        let size = NSSize(width: 15, height: 15)
         let img = NSImage(size: size, flipped: true) { rect in
-            let n = 4
-            let gap: CGFloat = 1
+            let n = 3
+            let gap: CGFloat = 1.2
             let cell = (rect.width - gap * CGFloat(n - 1)) / CGFloat(n)
-            // 透明度图案：模拟马赛克明暗不均
             let alphas: [[CGFloat]] = [
-                [1.0, 0.45, 1.0, 0.25],
-                [0.45, 1.0, 0.25, 0.7],
-                [1.0, 0.25, 0.7, 1.0],
-                [0.25, 0.7, 1.0, 0.45],
+                [1.0, 0.4, 1.0],
+                [0.4, 1.0, 0.4],
+                [1.0, 0.4, 0.7],
             ]
             for row in 0..<n {
                 for col in 0..<n {
                     let r = CGRect(x: CGFloat(col) * (cell + gap), y: CGFloat(row) * (cell + gap), width: cell, height: cell)
                     NSColor.black.withAlphaComponent(alphas[row][col]).setFill()
-                    NSBezierPath(roundedRect: r, xRadius: 0.8, yRadius: 0.8).fill()
+                    NSBezierPath(roundedRect: r, xRadius: 1, yRadius: 1).fill()
                 }
             }
             return true
