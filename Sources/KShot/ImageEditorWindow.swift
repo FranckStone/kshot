@@ -218,8 +218,11 @@ final class ImageCanvasView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        // 长图很高，只绘制需要刷新的那一块，避免每次滚动都重绘整张图
+        let r = dirtyRect.intersection(bounds)
+        guard !r.isEmpty else { return }
         ctx.interpolationQuality = .none
-        nsImage.draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        nsImage.draw(in: r, from: r, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
         ctx.interpolationQuality = .high
         var list = annotations
         if let current { list.append(current) }
