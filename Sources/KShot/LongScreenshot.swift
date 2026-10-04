@@ -124,7 +124,9 @@ final class LongScreenshotSession {
                 guard noMatchCount >= (autoScroll ? 3 : 6) else { continue }
                 dump(frame.image)
                 let d = stitcher.lastDiagnostics
-                Log.info("longshot no match x\(noMatchCount) (header \(d.header), footer \(d.footer))")
+                if noMatchCount <= 8 || noMatchCount % 50 == 0 {
+                    Log.info("longshot no match x\(noMatchCount): \(d.reason) shift \(d.shift) score \(String(format: "%.2f", d.score)) halves \(String(format: "%.2f/%.2f", d.halves.0, d.halves.1)) header \(d.header) footer \(d.footer)")
+                }
                 hint(autoScroll ? "画面变化太大，已暂停自动滚动" : "滚得太快，接不上了：请往回滚一点再继续")
                 if autoScroll { autoScroll = false; panel.setAuto(false) }
             }

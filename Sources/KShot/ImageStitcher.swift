@@ -25,7 +25,11 @@ final class ImageStitcher {
         var score = 0.0
         var header = 0
         var footer = 0
+        var halves = (0.0, 0.0)
+        var reason = ""
     }
+    /// findShift 失败时的细节（调试）
+    private static var lastFailure = Diagnostics()
 
     private(set) var strips: [CGImage] = []
     private(set) var totalHeight = 0
@@ -75,7 +79,9 @@ final class ImageStitcher {
         guard bandBottom - bandTop > 24 else { return .noMatch }
 
         guard let (shift, score) = Self.findShift(prev: prev, next: frame, top: bandTop, bottom: bandBottom, expected: expectedShift) else {
-            lastDiagnostics = Diagnostics(shift: 0, score: -1, header: header, footer: footer)
+            lastDiagnostics = Self.lastFailure
+            lastDiagnostics.header = header
+            lastDiagnostics.footer = footer
             // 反向能匹配上 → 用户往回滚了
             if Self.findShift(prev: frame, next: prev, top: bandTop, bottom: bandBottom, expected: 0) != nil { return .scrolledUp }
             return .noMatch
@@ -179,9 +185,16 @@ final class ImageStitcher {
             let sc = score(s, step: 1)
             if sc < best.score { best = (s, sc) }
         }
-        guard best.score < 6 else { return nil }
+        guard best.score < 6 else {
+            lastFailure = Diagnostics(shift: best.shift, score: best.score, reason: "score")
+            return nil
+        }
         // 重叠区上下两半分别校验：撕裂帧（一半已刷新、一半未刷新）整体得分可能仍低，但必有一半对不上
-        if !halvesAgree(prev: prev, next: next, top: top, bandH: bandH, shift: best.shift) { return nil }
+        let halves = halfScores(prev: prev, next: next, top: top, bandH: bandH, shift: best.shift)
+        if halves.0 >= 6 || halves.1 >= 6 {
+            lastFailure = Diagnostics(shift: best.shift, score: best.score, halves: halves, reason: "halves")
+            return nil
+        }
 
         // 内容单调（大片空白）时很多候选几乎同分：只有在最优解本身已接近完美、且候选确实多到分不清时，才取最接近预期滚动量的
         if expected > 0, best.score < 1.0 {
@@ -199,15 +212,15 @@ final class ImageStitcher {
         return (best.shift, best.score)
     }
 
-    private static func halvesAgree(prev: Frame, next: Frame, top: Int, bandH: Int, shift: Int) -> Bool {
+    private static func halfScores(prev: Frame, next: Frame, top: Int, bandH: Int, shift: Int) -> (Double, Double) {
         let overlap = bandH - shift
         let skip = overlap / 10
         let usable = overlap - skip
-        guard usable >= 16 else { return true }
+        guard usable >= 16 else { return (0, 0) }
         let half = usable / 2
         let a = meanDiff(prev.rows, next.rows, aStart: top + shift + skip, bStart: top + skip, count: half, step: 1)
         let b = meanDiff(prev.rows, next.rows, aStart: top + shift + skip + half, bStart: top + skip + half, count: usable - half, step: 1)
-        return a < 6 && b < 6
+        return (a, b)
     }
 
     /// a[aStart + i] 与 b[bStart + i] 的平均绝对差
