@@ -94,3 +94,63 @@ final class GlassPanelView: NSView {
 
     override func mouseDown(with event: NSEvent) {}
 }
+
+/// 玻璃边框：四条玻璃条拼成一圈，macOS 26+ 用容器视图把它们融合成连续的框
+final class GlassFrameView: NSView {
+    static let thickness: CGFloat = 7
+    private var strips: [NSView] = []
+    private var host: NSView?
+
+    override var isFlipped: Bool { true }
+
+    init(tint: NSColor?) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        if #available(macOS 26.0, *) {
+            let container = NSGlassEffectContainerView()
+            container.spacing = 12
+            let content = NSView()
+            container.contentView = content
+            for _ in 0..<4 {
+                let g = NSGlassEffectView()
+                g.cornerRadius = GlassFrameView.thickness / 2
+                g.tintColor = tint
+                content.addSubview(g)
+                strips.append(g)
+            }
+            addSubview(container)
+            host = container
+        } else {
+            let content = NSView()
+            for _ in 0..<4 {
+                let v = NSVisualEffectView()
+                v.material = .popover
+                v.blendingMode = .withinWindow
+                v.state = .active
+                v.wantsLayer = true
+                v.layer?.cornerRadius = GlassFrameView.thickness / 2
+                content.addSubview(v)
+                strips.append(v)
+            }
+            addSubview(content)
+            host = content
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let t = GlassFrameView.thickness
+        let b = bounds
+        host?.frame = b
+        if #available(macOS 26.0, *), let c = host as? NSGlassEffectContainerView { c.contentView?.frame = b }
+        guard strips.count == 4 else { return }
+        strips[0].frame = CGRect(x: 0, y: 0, width: b.width, height: t)                // 上
+        strips[1].frame = CGRect(x: 0, y: b.height - t, width: b.width, height: t)     // 下
+        strips[2].frame = CGRect(x: 0, y: 0, width: t, height: b.height)               // 左
+        strips[3].frame = CGRect(x: b.width - t, y: 0, width: t, height: b.height)     // 右
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+}

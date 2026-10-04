@@ -54,11 +54,13 @@ final class OverlayView: NSView {
     private let toolbar = ToolbarView()
     private let options = OptionsView()
     private let sizeLabel = SizeLabelView()
+    private let hoverFrame = GlassFrameView(tint: NSColor.wechatGreen.withAlphaComponent(0.45))
     private var textEditor: TextEditorView?
     private var textGlass: GlassPanelView?
     private static let textGlassInset = CGSize(width: 8, height: 5)
 
     private static let dimAlpha: CGFloat = 0.42
+    private static let fullScreenDimAlpha: CGFloat = 0.25
     private static let handleRadius: CGFloat = 4
     private static let handleHitSlop: CGFloat = 8
 
@@ -83,6 +85,8 @@ final class OverlayView: NSView {
         toolbar.isHidden = true
         options.isHidden = true
         sizeLabel.isHidden = true
+        hoverFrame.isHidden = true
+        addSubview(hoverFrame)
         addSubview(sizeLabel)
         addSubview(toolbar)
         addSubview(options)
@@ -131,24 +135,27 @@ final class OverlayView: NSView {
             renderer.draw(list, clip: sel, in: ctx)
         }
 
-        // 3. 遮罩：选区/悬停窗口以外的部分压暗
+        // 3. 遮罩：选区/悬停窗口以外的部分压暗；悬停到整屏时整体轻微压暗，提示处于截图状态
         let cut = selection ?? hoverRect
+        let fullScreenHover = selection == nil && hoverRect == bounds
         ctx.saveGState()
-        if let cut {
+        if let cut, !fullScreenHover {
             ctx.addRect(bounds)
             ctx.addRect(cut)
             ctx.clip(using: .evenOdd)
         }
-        ctx.setFillColor(NSColor(white: 0, alpha: OverlayView.dimAlpha).cgColor)
+        ctx.setFillColor(NSColor(white: 0, alpha: fullScreenHover ? OverlayView.fullScreenDimAlpha : OverlayView.dimAlpha).cgColor)
         ctx.fill(bounds)
         ctx.restoreGState()
 
         guard let cut else { return }
 
-        // 4. 边框
-        ctx.setStrokeColor(NSColor.wechatGreen.cgColor)
-        ctx.setLineWidth(2)
-        ctx.stroke(cut.insetBy(dx: -1, dy: -1))
+        // 4. 边框（悬停状态用玻璃框子视图，选区用细线）
+        if selection != nil {
+            ctx.setStrokeColor(NSColor.wechatGreen.cgColor)
+            ctx.setLineWidth(2)
+            ctx.stroke(cut.insetBy(dx: -1, dy: -1))
+        }
 
         // 5. 把手
         if showsHandles, let sel = selection {
@@ -166,9 +173,27 @@ final class OverlayView: NSView {
 
     }
 
-    /// 每次标记重绘时同步更新尺寸标签（玻璃胶囊子视图）
-    override var needsDisplay: Bool {
-        didSet { if needsDisplay { updateSizeLabel() } }
+    /// 绘制前同步尺寸标签与悬停玻璃框（子视图）。
+    /// 不能挂在 needsDisplay 的属性观察器里：改子视图 frame 会再次触发父视图 needsDisplay，重入后 AppKit 会丢掉这次重绘。
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        updateSizeLabel()
+        updateHoverFrame()
+    }
+
+    private func updateHoverFrame() {
+        guard selection == nil, let rect = hoverRect else {
+            hoverFrame.isHidden = true
+            return
+        }
+        let t = GlassFrameView.thickness
+        // 整屏时玻璃框贴在屏幕边缘内侧
+        let f = rect == bounds ? bounds : rect.insetBy(dx: -t, dy: -t)
+        if hoverFrame.frame != f {
+            hoverFrame.frame = f
+            hoverFrame.needsLayout = true
+        }
+        hoverFrame.isHidden = false
     }
 
     private func updateSizeLabel() {
@@ -178,10 +203,12 @@ final class OverlayView: NSView {
         }
         let scale = shot.scale
         let size = sizeLabel.setText("\(Int((rect.width * scale).rounded())) × \(Int((rect.height * scale).rounded()))")
-        var origin = CGPoint(x: rect.minX, y: rect.minY - size.height - 6)
+        let gap: CGFloat = selection == nil ? GlassFrameView.thickness + 6 : 6
+        var origin = CGPoint(x: rect.minX, y: rect.minY - size.height - gap)
         if origin.y < bounds.minY + 2 {
-            origin.y = rect.minY + 6
-            origin.x = rect.minX + 6
+            let inset: CGFloat = (selection == nil && rect == bounds) ? GlassFrameView.thickness + 6 : 6
+            origin.y = rect.minY + inset
+            origin.x = rect.minX + inset
         }
         origin.x = min(max(bounds.minX + 2, origin.x), bounds.maxX - size.width - 2)
         sizeLabel.frame = CGRect(origin: origin, size: size)
@@ -728,6 +755,7 @@ extension OverlayView {
     }
 
     var debugSelection: CGRect? { selection }
+    var debugHover: String { "hover=\(String(describing: hoverRect)) frameHidden=\(hoverFrame.isHidden) frame=\(hoverFrame.frame)" }
     var debugToolbarFrame: CGRect { toolbar.frame }
     var debugOptionsFrame: CGRect? { options.isHidden ? nil : options.frame }
     var debugAnnotationCount: Int { annotations.count }
@@ -780,7 +808,7 @@ final class SelfTest {
         overlay.displayIfNeeded()
         let file = dir.appendingPathComponent(String(format: "%02d-%@.png", index + 1, name))
         overlay.debugSnapshot(to: file)
-        Log.info("selftest step \(index + 1) \(name): selection=\(String(describing: overlay.debugSelection)) toolbar=\(overlay.debugToolbarFrame) options=\(String(describing: overlay.debugOptionsFrame)) annotations=\(overlay.debugAnnotationCount)")
+        Log.info("selftest step \(index + 1) \(name): \(overlay.debugHover) selection=\(String(describing: overlay.debugSelection)) toolbar=\(overlay.debugToolbarFrame) options=\(String(describing: overlay.debugOptionsFrame)) annotations=\(overlay.debugAnnotationCount)")
         index += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in run() }
     }
