@@ -7,6 +7,14 @@ final class OCRResultWindow: NSWindow {
 
     private let textView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let translatedView = NSTextView()
+    private var sourceScroll: NSScrollView!
+    private var translatedScroll: NSScrollView!
+    private var translatedTitle: NSTextField!
+    private var copyTranslationButton: NSButton!
+    private let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let translator = Translator()
+    private var content: NSView!
 
     init(text: String, near rect: CGRect) {
         let size = NSSize(width: 520, height: 360)
@@ -29,6 +37,7 @@ final class OCRResultWindow: NSWindow {
         let root = NSView(frame: CGRect(origin: .zero, size: size))
         root.wantsLayer = true
         let content = NSView(frame: root.bounds)
+        self.content = content
         content.autoresizingMask = [.width, .height]
         let backdrop = GlassBackdrop.make(cornerRadius: 18, content: content)
         backdrop.frame = root.bounds
@@ -70,6 +79,32 @@ final class OCRResultWindow: NSWindow {
         textView.layer?.cornerRadius = 10
         scroll.documentView = textView
         content.addSubview(scroll)
+        sourceScroll = scroll
+
+        // 译文面板（翻译后显示）
+        translatedTitle = NSTextField(labelWithString: "译文")
+        translatedTitle.font = .systemFont(ofSize: 12, weight: .medium)
+        translatedTitle.textColor = .secondaryLabelColor
+        translatedTitle.isHidden = true
+        content.addSubview(translatedTitle)
+        translatedScroll = NSScrollView(frame: .zero)
+        translatedScroll.hasVerticalScroller = true
+        translatedScroll.drawsBackground = false
+        translatedScroll.borderType = .noBorder
+        translatedView.autoresizingMask = [.width]
+        translatedView.isEditable = true
+        translatedView.isRichText = false
+        translatedView.drawsBackground = true
+        translatedView.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.55)
+        translatedView.font = .systemFont(ofSize: 14)
+        translatedView.textColor = .labelColor
+        translatedView.textContainerInset = NSSize(width: 10, height: 10)
+        translatedView.wantsLayer = true
+        translatedView.layer?.cornerRadius = 10
+        translatedScroll.documentView = translatedView
+        translatedScroll.isHidden = true
+        content.addSubview(translatedScroll)
+        content.addSubview(translator.hostView)
 
         // 按钮
         let close = NSButton(title: "关闭", target: self, action: #selector(closeWindow))
@@ -85,11 +120,24 @@ final class OCRResultWindow: NSWindow {
         if #available(macOS 26.0, *) { copy.bezelColor = .accentGreen }
         content.addSubview(copy)
 
-        let hint = NSTextField(labelWithString: "⌘C 复制选中文字 · ⏎ 复制全部 · Esc 关闭")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .tertiaryLabelColor
-        hint.frame = CGRect(x: 20, y: 20, width: 300, height: 16)
-        content.addSubview(hint)
+        // 翻译：目标语言 + 按钮
+        for lang in TargetLanguage.all { languagePopup.addItem(withTitle: lang.title) }
+        languagePopup.frame = CGRect(x: 16, y: 14, width: 110, height: 30)
+        languagePopup.selectItem(at: TargetLanguage.all.firstIndex(of: TargetLanguage.guess(for: text)) ?? 0)
+        content.addSubview(languagePopup)
+
+        let translate = NSButton(title: "翻译", target: self, action: #selector(translateAction))
+        translate.bezelStyle = .rounded
+        translate.frame = CGRect(x: 130, y: 14, width: 70, height: 30)
+        translate.isEnabled = Translator.isAvailable
+        translate.toolTip = Translator.isAvailable ? "用系统翻译把文字译成所选语言" : "翻译需要 macOS 15 或更高版本"
+        content.addSubview(translate)
+
+        copyTranslationButton = NSButton(title: "复制译文", target: self, action: #selector(copyTranslation))
+        copyTranslationButton.bezelStyle = .rounded
+        copyTranslationButton.frame = CGRect(x: 204, y: 14, width: 90, height: 30)
+        copyTranslationButton.isHidden = true
+        content.addSubview(copyTranslationButton)
 
         OCRResultWindow.all.append(self)
         OCRResultWindow.latest = self
@@ -98,7 +146,63 @@ final class OCRResultWindow: NSWindow {
     override var canBecomeKey: Bool { true }
 
     func setStatus(_ s: String) { statusLabel.stringValue = s }
-    func setText(_ s: String) { textView.string = s }
+    func setText(_ s: String) {
+        textView.string = s
+        languagePopup.selectItem(at: TargetLanguage.all.firstIndex(of: TargetLanguage.guess(for: s)) ?? 0)
+    }
+    var translatedText: String { translatedView.string }
+
+    /// 翻译原文到所选语言
+    @objc func translateAction() {
+        let source = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else { setStatus("没有可翻译的文字"); return }
+        let target = TargetLanguage.all[max(0, languagePopup.indexOfSelectedItem)]
+        showTranslationPane()
+        translatedView.string = "正在翻译…"
+        setStatus("")
+        translator.translate(source, to: target) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let text):
+                self.translatedView.string = text
+                self.setStatus("已翻译为\(target.title)")
+                Log.info("translate ok: \(text.count) chars")
+            case .failure(let error):
+                self.translatedView.string = ""
+                self.setStatus("翻译失败：\(error.localizedDescription)")
+                Log.info("translate failed: \(error)")
+            }
+        }
+    }
+
+    private func showTranslationPane() {
+        guard translatedScroll.isHidden else { return }
+        // 窗口加高，原文与译文上下各占一半
+        var f = frame
+        let extra: CGFloat = 180
+        f.origin.y -= extra
+        f.size.height += extra
+        setFrame(f, display: true)
+        let size = content.bounds.size
+        let top = size.height - 56
+        let bottom: CGFloat = 56
+        let gap: CGFloat = 26
+        let paneH = (top - bottom - gap) / 2
+        sourceScroll.frame = CGRect(x: 16, y: bottom + paneH + gap, width: size.width - 32, height: paneH)
+        translatedTitle.frame = CGRect(x: 20, y: bottom + paneH + 4, width: 100, height: 18)
+        translatedScroll.frame = CGRect(x: 16, y: bottom, width: size.width - 32, height: paneH)
+        translatedView.frame = translatedScroll.bounds
+        translatedTitle.isHidden = false
+        translatedScroll.isHidden = false
+        copyTranslationButton.isHidden = false
+    }
+
+    @objc private func copyTranslation() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(translatedView.string, forType: .string)
+        setStatus("译文已复制到剪贴板")
+    }
     var text: String { textView.string }
 
     @objc private func copyAll() {

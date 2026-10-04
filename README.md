@@ -38,7 +38,7 @@
 
 ![钉在屏幕上](docs/screenshot-pin.png)
 
-“提取文字”用系统 Vision 做中英文 OCR，结果自动复制到剪贴板，窗口里可以继续编辑：
+“提取文字”用系统 Vision 做中英文 OCR，结果自动复制到剪贴板，窗口里可以继续编辑；“翻译”在此基础上调用系统 Translation 框架离线翻译，译文显示在下方面板：
 
 ![提取文字](docs/screenshot-ocr.png)
 
@@ -63,13 +63,14 @@
 | 拖拽 | 自由框选 |
 | 拖动选区 / 拖动 8 个把手 | 移动 / 调整选区 |
 | 方向键（+⇧ 大步） | 微调选区位置 |
-| 工具条 | 矩形、椭圆、箭头、画笔、马赛克、文字、撤销、钉在屏幕上、提取文字、保存、取消、完成 |
+| 工具条 | 矩形、椭圆、箭头、画笔、马赛克、文字 ｜ 撤销、钉在屏幕上、保存 ｜ 提取文字、翻译 ｜ 取消、完成 |
 | 选项面板 | 选工具后出现：三档粗细/字号 + 8 色 |
 | 文字工具 | 在选区内点击输入；点击别处、Esc 或 ⌘⏎ 结束 |
 | `⏎` / 双击选区 / ⌘C | 完成，图片复制到剪贴板 |
 | `⌘S` | 保存为 PNG |
 | `⌘P` | 钉在屏幕上（悬浮图片：拖动移动、滚轮缩放、双击或 Esc 关闭、右键菜单） |
 | `⌘T` | 提取文字：对选区做中英文 OCR，结果自动复制到剪贴板并弹出可编辑的结果窗口 |
+| `⌘L` | 翻译：识别选区文字后用系统翻译译成所选语言（中文译英、其他译中，可在结果窗口切换目标语言；macOS 15+，首次需按系统提示下载语言包） |
 | `⌘Z` | 撤销上一步标注 |
 | 右键 | 有选区时回到窗口识别状态；无选区时退出 |
 | `Esc` | 退出截图 |
@@ -86,6 +87,7 @@ open build/KShot.app --args --shoot --demo --selftest   # 用绘制的示例桌�
 open build/KShot.app --args --shoot --demo --selftest --pause-at 18   # 停在第 18 步并用 ScreenCaptureKit 抓一张真实合成的屏幕（含玻璃效果）
 open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后一步改为“钉住”并抓屏
 open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后一步改为“提取文字”并抓屏
+open build/KShot.app --args --shoot --demo --selftest --translate-test   # 最后一步改为“翻译”并抓屏
 ```
 
 安装到“应用程序”并开机自启：`./install.sh`（首次从 /Applications 启动时自动注册登录项，可在菜单里关闭）。
@@ -106,6 +108,7 @@ open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后�
 - `Exporter.swift` 裁剪合成、剪贴板、保存
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
+- `Translator.swift` 基于系统 Translation 框架的翻译器（通过隐藏的 SwiftUI 宿主视图驱动）
 - `MenuBarIcon.swift` 菜单栏模板图标
 - `DemoScene.swift` 演示模式的示例桌面
 - `tools/make-icon.swift` App 图标生成脚本（含多种备选风格）

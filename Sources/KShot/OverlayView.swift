@@ -466,6 +466,7 @@ final class OverlayView: NSView {
             case "c": target.confirm(); return
             case "p": target.pin(); return
             case "t": target.recognizeText(); return
+            case "l": target.recognizeText(thenTranslate: true); return
             default: break
             }
         }
@@ -488,7 +489,7 @@ final class OverlayView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // 让 ⌘Z/⌘S/⌘C/⌘P 不触发系统提示音
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p", "t"].contains(c) {
+        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p", "t", "l"].contains(c) {
             keyDown(with: event)
             return true
         }
@@ -648,6 +649,7 @@ final class OverlayView: NSView {
         case .undo: undo()
         case .pin: pin()
         case .ocr: recognizeText()
+        case .translate: recognizeText(thenTranslate: true)
         case .save: save()
         case .cancel: session.cancel()
         case .confirm: confirm()
@@ -720,7 +722,7 @@ final class OverlayView: NSView {
     }
 
     /// 提取选区内的文字（用原始截图，不含标注）
-    private func recognizeText() {
+    private func recognizeText(thenTranslate: Bool = false) {
         commitText()
         guard let sel = selection,
               let img = Exporter.render(shot: shot, selection: sel, annotations: [], renderer: renderer) else { return }
@@ -742,6 +744,7 @@ final class OverlayView: NSView {
                     pb.clearContents()
                     pb.setString(text, forType: .string)
                     win.setStatus("已识别 \(lines.count) 处文字，已复制到剪贴板")
+                    if thenTranslate { win.translateAction() }
                 }
                 Log.info("ocr: \(lines.count) lines")
             } catch {
@@ -964,14 +967,16 @@ final class SelfTest {
             o.debugDrag([CGPoint(x: 100, y: 200), CGPoint(x: 300, y: 350), CGPoint(x: 700, y: 620)])
         }
         t.add("nudge-right") { o.debugKey(code: 124, chars: "") }
-        if CommandLine.arguments.contains("--ocr-test") {
-            t.add("ocr") {
+        if CommandLine.arguments.contains("--ocr-test") || CommandLine.arguments.contains("--translate-test") {
+            let translate = CommandLine.arguments.contains("--translate-test")
+            t.add(translate ? "translate" : "ocr") {
                 if CommandLine.arguments.contains("--demo") { SelfTest.showDemoBackdrop(for: o) }
-                o.debugAction(.ocr)
+                o.debugAction(translate ? .translate : .ocr)
                 let url = t.dir.appendingPathComponent("screen.png")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
                     Task { @MainActor in
                         Log.info("ocr text: \(OCRResultWindow.latest?.text.replacingOccurrences(of: "\n", with: " | ") ?? "nil")")
+                        if translate { Log.info("translated: \(OCRResultWindow.latest?.translatedText.replacingOccurrences(of: "\n", with: " | ") ?? "nil")") }
                         if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
                             try? data.write(to: url)
                             Log.info("ocr screen captured")

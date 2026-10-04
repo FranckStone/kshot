@@ -5,6 +5,7 @@ enum ToolbarAction {
     case undo
     case pin
     case ocr
+    case translate
     case save
     case cancel
     case confirm
@@ -179,8 +180,10 @@ final class ToolbarView: NSView {
         add(.undo, "arrow.uturn.backward", "撤销  ⌘Z")
         undoButton = items.last!.button
         add(.pin, "pin", "钉在屏幕上  ⌘P")
-        add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字  ⌘T")
         add(.save, "square.and.arrow.down", "保存  ⌘S")
+        separatorsAfter.insert(items.count - 1)
+        add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字  ⌘T")
+        add(.translate, "translate", fallback: "globe", "翻译  ⌘L")
         separatorsAfter.insert(items.count - 1)
         add(.cancel, "xmark", "取消  Esc", role: .destructive)
         add(.confirm, "checkmark", "完成  ⏎", role: .prominent)
