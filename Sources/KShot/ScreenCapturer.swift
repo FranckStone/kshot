@@ -70,8 +70,16 @@ final class RegionCapturer: @unchecked Sendable {
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw CaptureError.noDisplays
         }
-        let excluded = content.windows.filter { excludingWindowIDs.contains($0.windowID) }
-        filter = SCContentFilter(display: display, excludingWindows: excluded)
+        // 排除整个 KShot 应用（控制面板、预览等），比按窗口号排除可靠
+        let me = Bundle.main.bundleIdentifier ?? ""
+        let myApps = content.applications.filter { $0.bundleIdentifier == me }
+        let byID = content.windows.filter { excludingWindowIDs.contains($0.windowID) }
+        Log.info("region capturer: exclude apps=\(myApps.count) windowsByID=\(byID.count)/\(excludingWindowIDs.count)")
+        if !myApps.isEmpty {
+            filter = SCContentFilter(display: display, excludingApplications: myApps, exceptingWindows: [])
+        } else {
+            filter = SCContentFilter(display: display, excludingWindows: byID)
+        }
         let c = SCStreamConfiguration()
         let scale = screen.backingScaleFactor
         c.sourceRect = localRect
