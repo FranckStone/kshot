@@ -22,6 +22,11 @@ final class CaptureSession {
         Task { @MainActor in
             defer { starting = false }
             do {
+                if CommandLine.arguments.contains("--demo"), let screen = NSScreen.main,
+                   let (shot, wins) = DemoScene.make(for: screen) {
+                    present(shots: [shot], windows: wins)
+                    return
+                }
                 let shots = try await ScreenCapturer.captureAll()
                 let wins = WindowFinder.onScreenWindows()
                 Log.info("captured \(shots.count) screens, \(wins.count) windows")

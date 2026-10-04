@@ -1,6 +1,20 @@
-# KShot — 微信风格的 macOS 截图工具
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="KShot 图标">
+</p>
 
-菜单栏常驻的截图小工具，交互对标微信 Mac 版截图：全屏冻结、自动识别窗口、拖拽选区、标注、复制/保存/钉住。
+<h1 align="center">KShot — 微信风格的 macOS 截图工具</h1>
+
+<p align="center">菜单栏常驻的截图小工具，交互对标微信 Mac 版截图：全屏冻结、自动识别窗口、拖拽选区、标注、复制 / 保存 / 钉住。</p>
+
+## 截图
+
+鼠标悬停自动识别窗口，左上角显示像素尺寸：
+
+![窗口识别](docs/screenshot-hover.png)
+
+选区下方的工具条与粗细 / 颜色面板，支持矩形、椭圆、箭头、画笔、马赛克、文字：
+
+![标注](docs/screenshot-annotate.png)
 
 ## 构建与运行
 
@@ -41,7 +55,10 @@
 open build/KShot.app --args --shoot      # 启动后立即截图
 open build/KShot.app --args --shoot --selftest   # 自动跑完整交互脚本，截图存到 ~/Library/Logs/KShot-selftest/
 open build/KShot.app --args --shoot --dump       # 每秒把遮罩渲染到 ~/Library/Logs/KShot-overlay.png
+open build/KShot.app --args --shoot --demo --selftest   # 用绘制的示例桌面代替真实抓屏，生成不含隐私的演示截图
 ```
+
+安装到“应用程序”并开机自启：`./install.sh`（首次从 /Applications 启动时自动注册登录项，可在菜单里关闭）。
 
 日志：`~/Library/Logs/KShot.log`
 
@@ -58,3 +75,6 @@ open build/KShot.app --args --shoot --dump       # 每秒把遮罩渲染到 ~/Li
 - `Annotations.swift` 标注模型与渲染
 - `Exporter.swift` 裁剪合成、剪贴板、保存
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
+- `MenuBarIcon.swift` 菜单栏模板图标
+- `DemoScene.swift` 演示模式的示例桌面
+- `tools/make-icon.swift` App 图标生成脚本（含多种备选风格）
