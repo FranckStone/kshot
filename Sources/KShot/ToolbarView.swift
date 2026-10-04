@@ -26,6 +26,8 @@ final class ToolButton: NSButton {
         super.init(frame: CGRect(x: 0, y: 0, width: ToolbarView.buttonSize, height: ToolbarView.buttonSize))
         if symbol.hasPrefix("text:") {
             image = ToolButton.letterIcon(String(symbol.dropFirst(5)))
+        } else if symbol == "custom:mosaic" {
+            image = ToolButton.mosaicIcon()
         } else {
             var img = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
             if img == nil, let fallback { img = NSImage(systemSymbolName: fallback, accessibilityDescription: tip) }
@@ -52,6 +54,33 @@ final class ToolButton: NSButton {
             let str = NSAttributedString(string: letter, attributes: attrs)
             let s = str.size()
             str.draw(at: NSPoint(x: (rect.width - s.width) / 2, y: (rect.height - s.height) / 2))
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }
+
+    /// 马赛克图标：4×4 深浅交错的像素块
+    static func mosaicIcon() -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let img = NSImage(size: size, flipped: true) { rect in
+            let n = 4
+            let gap: CGFloat = 1
+            let cell = (rect.width - gap * CGFloat(n - 1)) / CGFloat(n)
+            // 透明度图案：模拟马赛克明暗不均
+            let alphas: [[CGFloat]] = [
+                [1.0, 0.45, 1.0, 0.25],
+                [0.45, 1.0, 0.25, 0.7],
+                [1.0, 0.25, 0.7, 1.0],
+                [0.25, 0.7, 1.0, 0.45],
+            ]
+            for row in 0..<n {
+                for col in 0..<n {
+                    let r = CGRect(x: CGFloat(col) * (cell + gap), y: CGFloat(row) * (cell + gap), width: cell, height: cell)
+                    NSColor.black.withAlphaComponent(alphas[row][col]).setFill()
+                    NSBezierPath(roundedRect: r, xRadius: 0.8, yRadius: 0.8).fill()
+                }
+            }
             return true
         }
         img.isTemplate = true
@@ -145,7 +174,7 @@ final class ToolbarView: NSView {
         add(.tool(.ellipse), "circle", "椭圆")
         add(.tool(.arrow), "arrow.up.right", "箭头")
         add(.tool(.pen), "pencil.line", fallback: "scribble", "画笔")
-        add(.tool(.mosaic), "mosaic", fallback: "square.grid.3x3.fill", "马赛克")
+        add(.tool(.mosaic), "custom:mosaic", "马赛克")
         add(.tool(.text), "text:T", "文字")
         separatorsAfter.insert(items.count - 1)
         add(.undo, "arrow.uturn.backward", "撤销  ⌘Z")
