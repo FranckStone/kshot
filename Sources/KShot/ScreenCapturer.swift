@@ -65,7 +65,7 @@ final class RegionCapturer: @unchecked Sendable {
 
     /// localRect：屏幕局部坐标（左上原点、pt）；excludingWindowIDs：要排除的自家窗口
     @MainActor
-    init(screen: NSScreen, localRect: CGRect, excludingWindowIDs: Set<CGWindowID>) async throws {
+    init(screen: NSScreen, localRect: CGRect, excludingWindowIDs: Set<CGWindowID>, excludeOwnApp: Bool = true) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw CaptureError.noDisplays
@@ -75,7 +75,7 @@ final class RegionCapturer: @unchecked Sendable {
         let myApps = content.applications.filter { $0.bundleIdentifier == me }
         let byID = content.windows.filter { excludingWindowIDs.contains($0.windowID) }
         Log.info("region capturer: exclude apps=\(myApps.count) windowsByID=\(byID.count)/\(excludingWindowIDs.count)")
-        if !myApps.isEmpty {
+        if excludeOwnApp, !myApps.isEmpty {
             filter = SCContentFilter(display: display, excludingApplications: myApps, exceptingWindows: [])
         } else {
             filter = SCContentFilter(display: display, excludingWindows: byID)

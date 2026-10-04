@@ -78,7 +78,8 @@ final class LongScreenshotSession {
 
     private func loop() async {
         do {
-            capturer = try await RegionCapturer(screen: screen, localRect: region, excludingWindowIDs: excluded)
+            // 演示模式的目标窗口也是本应用的，只按窗口号排除面板
+            capturer = try await RegionCapturer(screen: screen, localRect: region, excludingWindowIDs: excluded, excludeOwnApp: customScroller == nil)
         } catch {
             fail("抓屏失败：\(error.localizedDescription)")
             return
