@@ -23,6 +23,14 @@ final class LongScreenshotSession {
     var onFinish: ((CGImage) -> Void)?
 
     private var capturer: RegionCapturer?
+    /// 每帧保存到 ~/Library/Logs/KShot-longshot/，便于排查拼接问题
+    private let dumpDir: URL = {
+        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/KShot-longshot")
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+    private var dumpIndex = 0
 
     /// 每次滚动的距离（pt），取区域高度的 45%，保证帧间有足够重叠
     private var scrollStep: CGFloat { (region.height * 0.45).rounded() }
@@ -63,6 +71,7 @@ final class LongScreenshotSession {
         }
         // 第一帧
         guard let first = await settledFrame() else { fail("抓屏失败"); return }
+        dump(first.image)
         _ = stitcher.push(frame: first)
         frames = 1
         panel.setProgress(frames: frames, height: stitcher.totalHeight)
@@ -76,11 +85,13 @@ final class LongScreenshotSession {
             }
             guard running, let frame = await settledFrame() else { continue }
             let expected = Int(scrollStep * screen.backingScaleFactor)
+            dump(frame.image)
             switch stitcher.push(frame: frame, expectedShift: autoScroll ? expected : 0) {
             case .appended(let rows):
                 frames += 1
                 staticCount = 0
-                Log.info("longshot appended \(rows) px, total \(stitcher.totalHeight)")
+                let d = stitcher.lastDiagnostics
+                Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", d.score)), header \(d.header), footer \(d.footer), expected \(expected)), total \(stitcher.totalHeight)")
                 panel.setProgress(frames: frames, height: stitcher.totalHeight)
             case .unchanged:
                 staticCount += 1
@@ -90,7 +101,8 @@ final class LongScreenshotSession {
                 }
             case .noMatch:
                 staticCount = 0
-                Log.info("longshot no match")
+                let d = stitcher.lastDiagnostics
+                Log.info("longshot no match (header \(d.header), footer \(d.footer), expected \(expected))")
             }
         }
     }
@@ -106,11 +118,19 @@ final class LongScreenshotSession {
         return await Task.detached(priority: .userInitiated) { ImageStitcher.makeFrame(img) }.value
     }
 
-    /// 连续抓帧直到画面静止（滚动动画结束），最多等约 1.2 秒
+    private func dump(_ image: CGImage) {
+        dumpIndex += 1
+        let url = dumpDir.appendingPathComponent(String(format: "frame-%02d.png", dumpIndex))
+        Task.detached(priority: .background) {
+            if let data = Exporter.pngData(image) { try? data.write(to: url) }
+        }
+    }
+
+    /// 连续抓帧直到画面静止（滚动动画结束），最多等约 0.6 秒
     private func settledFrame() async -> ImageStitcher.Frame? {
         guard var last = await captureFrame() else { return nil }
-        for _ in 0..<10 {
-            try? await Task.sleep(for: .milliseconds(90))
+        for _ in 0..<6 {
+            try? await Task.sleep(for: .milliseconds(70))
             guard running, let next = await captureFrame() else { return last }
             if ImageStitcher.isSame(last, next) { return next }
             last = next
@@ -137,6 +157,7 @@ final class LongScreenshotSession {
         LongScreenshotSession.current = nil
         guard let image = stitcher.compose() else { fail("没有拼接出内容"); return }
         if let debugOutputURL, let data = Exporter.pngData(image) { try? data.write(to: debugOutputURL) }
+        if let data = Exporter.pngData(image) { try? data.write(to: dumpDir.appendingPathComponent("result.png")) }
         onFinish?(image)
         Exporter.copyToClipboard(image)
         let win = ImageEditorWindow(image: image, scale: screen.backingScaleFactor, screen: screen, title: "长截图")
