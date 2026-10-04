@@ -465,6 +465,7 @@ final class OverlayView: NSView {
             case "s": target.save(); return
             case "c": target.confirm(); return
             case "p": target.pin(); return
+            case "k": target.longShot(); return
             case "t": target.recognizeText(); return
             case "l": target.recognizeText(thenTranslate: true); return
             default: break
@@ -489,7 +490,7 @@ final class OverlayView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // 让 ⌘Z/⌘S/⌘C/⌘P 不触发系统提示音
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p", "t", "l"].contains(c) {
+        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p", "t", "l", "k"].contains(c) {
             keyDown(with: event)
             return true
         }
@@ -648,6 +649,7 @@ final class OverlayView: NSView {
             needsDisplay = true
         case .undo: undo()
         case .pin: pin()
+        case .longShot: longShot()
         case .ocr: recognizeText()
         case .translate: recognizeText(thenTranslate: true)
         case .save: save()
@@ -752,6 +754,18 @@ final class OverlayView: NSView {
                 win.setStatus("识别失败：\(error.localizedDescription)")
                 Log.info("ocr failed: \(error)")
             }
+        }
+    }
+
+    /// 长截图：隐藏遮罩后对选区自动滚动并拼接
+    private func longShot() {
+        commitText()
+        guard let sel = selection?.integral else { return }
+        let scr = screen
+        session.end(restoreFocus: true)
+        // 等遮罩真正消失后再开始抓第一帧
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            LongScreenshotSession(screen: scr, region: sel).start()
         }
     }
 

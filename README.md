@@ -38,6 +38,10 @@
 
 ![钉在屏幕上](docs/screenshot-pin.png)
 
+“长截图”对选区自动滚动并拼接成一张长图（下图为对 2600pt 高的示例内容自动滚动 10 屏拼接的结果，缩放显示）：
+
+![长截图](docs/screenshot-longshot-full.png)
+
 “提取文字”用系统 Vision 做中英文 OCR，结果自动复制到剪贴板，窗口里可以继续编辑；“翻译”在此基础上调用系统 Translation 框架离线翻译，译文显示在下方面板：
 
 ![提取文字](docs/screenshot-ocr.png)
@@ -63,12 +67,13 @@
 | 拖拽 | 自由框选 |
 | 拖动选区 / 拖动 8 个把手 | 移动 / 调整选区 |
 | 方向键（+⇧ 大步） | 微调选区位置 |
-| 工具条 | 矩形、椭圆、箭头、画笔、马赛克、文字 ｜ 撤销、钉在屏幕上、保存 ｜ 提取文字、翻译 ｜ 取消、完成 |
+| 工具条 | 矩形、椭圆、箭头、画笔、马赛克、文字 ｜ 撤销、钉在屏幕上、长截图、保存 ｜ 提取文字、翻译 ｜ 取消、完成 |
 | 选项面板 | 选工具后出现：三档粗细/字号 + 8 色 |
 | 文字工具 | 在选区内点击输入；点击别处、Esc 或 ⌘⏎ 结束 |
 | `⏎` / 双击选区 / ⌘C | 完成，图片复制到剪贴板 |
 | `⌘S` | 保存为 PNG |
 | `⌘P` | 钉在屏幕上（悬浮图片：拖动移动、滚轮缩放、双击或 Esc 关闭、右键菜单） |
+| `⌘K` | 长截图（滚动截图）：自动向选区发送滚轮事件、逐帧抓取并按重叠部分拼接，滚到底自动停止；需要“辅助功能”权限，未授权时可手动滚动，结果自动复制并在可滚动窗口中预览 |
 | `⌘T` | 提取文字：对选区做中英文 OCR，结果自动复制到剪贴板并弹出可编辑的结果窗口 |
 | `⌘L` | 翻译：识别选区文字后用系统翻译译成所选语言（中文译英、其他译中，可在结果窗口切换目标语言；macOS 15+，首次需按系统提示下载语言包） |
 | `⌘Z` | 撤销上一步标注 |
@@ -88,6 +93,9 @@ open build/KShot.app --args --shoot --demo --selftest --pause-at 18   # 停在�
 open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后一步改为“钉住”并抓屏
 open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后一步改为“提取文字”并抓屏
 open build/KShot.app --args --shoot --demo --selftest --translate-test   # 最后一步改为“翻译”并抓屏
+open build/KShot.app --args --longshot-demo      # 弹一个可滚动的示例窗口并对它跑完整长截图流程，结果存到 ~/Library/Logs/KShot-selftest/longshot.png
+open build/KShot.app --args --stitch-test        # 用合成长图验证拼接算法的像素精度
+open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域（pt，左上原点）启动长截图
 ```
 
 安装到“应用程序”并开机自启：`./install.sh`（首次从 /Applications 启动时自动注册登录项，可在菜单里关闭）。
@@ -109,6 +117,7 @@ open build/KShot.app --args --shoot --demo --selftest --translate-test   # 最�
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
 - `Translator.swift` 基于系统 Translation 框架的翻译器（通过隐藏的 SwiftUI 宿主视图驱动）
+- `LongScreenshot.swift` / `ImageStitcher.swift` 长截图会话（自动滚动、控制面板、结果窗口）与帧间拼接算法
 - `MenuBarIcon.swift` 菜单栏模板图标
 - `DemoScene.swift` 演示模式的示例桌面
 - `tools/make-icon.swift` App 图标生成脚本（含多种备选风格）

@@ -18,6 +18,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
         }
+        if CommandLine.arguments.contains("--stitch-test") {
+            StitchTest.run()
+            NSApp.terminate(nil)
+            return
+        }
+        // 调试用：把整屏抓成 PNG 后退出
+        if let i = CommandLine.arguments.firstIndex(of: "--capture-screen"), i + 1 < CommandLine.arguments.count {
+            let path = CommandLine.arguments[i + 1]
+            Task { @MainActor in
+                if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
+                    try? data.write(to: URL(fileURLWithPath: path))
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--longshot-demo") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { LongShotDemo.run() }
+            return
+        }
+        // 调试用：直接对主屏上的区域 x,y,w,h（pt，左上原点）启动长截图
+        if let i = CommandLine.arguments.firstIndex(of: "--longshot"), i + 1 < CommandLine.arguments.count {
+            let parts = CommandLine.arguments[i + 1].split(separator: ",").compactMap { Double($0) }
+            if parts.count == 4, let screen = NSScreen.screens.first {
+                let region = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    LongScreenshotSession(screen: screen, region: region).start()
+                }
+            }
+            return
+        }
         // 调试用：启动后立刻截图
         if CommandLine.arguments.contains("--shoot") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.takeScreenshot() }

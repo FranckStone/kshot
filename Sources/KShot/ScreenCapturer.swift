@@ -55,4 +55,25 @@ enum ScreenCapturer {
         guard !shots.isEmpty else { throw CaptureError.noDisplays }
         return shots
     }
+
+    /// 只抓取某块屏幕上的一个局部区域（局部坐标：左上原点、pt），可排除自己的窗口。
+    @MainActor
+    static func captureRegion(screen: NSScreen, localRect: CGRect, excludingWindowIDs: Set<CGWindowID>) async throws -> CGImage {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
+            throw CaptureError.noDisplays
+        }
+        let excluded = content.windows.filter { excludingWindowIDs.contains($0.windowID) }
+        let filter = SCContentFilter(display: display, excludingWindows: excluded)
+        let config = SCStreamConfiguration()
+        let scale = screen.backingScaleFactor
+        config.sourceRect = localRect
+        config.width = Int((localRect.width * scale).rounded())
+        config.height = Int((localRect.height * scale).rounded())
+        config.showsCursor = false
+        config.captureResolution = .best
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.colorSpaceName = CGColorSpace.sRGB
+        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    }
 }
