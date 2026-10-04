@@ -3,11 +3,12 @@ import AppKit
 /// 液态玻璃背板：macOS 26+ 用 NSGlassEffectView，更早的系统回退到 NSVisualEffectView。
 enum GlassBackdrop {
     /// 返回 (背板视图, 应该把内容放进去的容器)。背板会随 superview 自动拉伸。
-    static func make(cornerRadius: CGFloat, content: NSView) -> NSView {
+    static func make(cornerRadius: CGFloat, content: NSView, tint: NSColor? = nil) -> NSView {
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = cornerRadius
             glass.style = .regular
+            glass.tintColor = tint
             glass.contentView = content
             if #available(macOS 27.0, *) {
                 glass.effectIsInteractive = true
@@ -82,17 +83,47 @@ final class SizeLabelView: NSView {
 
 /// 通用玻璃面板（无内容，仅作背板）
 final class GlassPanelView: NSView {
-    init(cornerRadius: CGFloat) {
+    private let cornerRadius: CGFloat
+    private let ringColor: NSColor?
+    private let ringWidth: CGFloat
+
+    /// ringColor：在玻璃上叠加一圈描边（小尺寸玻璃在平坦背景上几乎看不见，需要描边提高可见度）
+    init(cornerRadius: CGFloat, tint: NSColor? = nil, ringColor: NSColor? = nil, ringWidth: CGFloat = 1.5) {
+        self.cornerRadius = cornerRadius
+        self.ringColor = ringColor
+        self.ringWidth = ringWidth
         super.init(frame: .zero)
         wantsLayer = true
-        let backdrop = GlassBackdrop.make(cornerRadius: cornerRadius, content: NSView())
+        let backdrop = GlassBackdrop.make(cornerRadius: cornerRadius, content: NSView(), tint: tint)
         backdrop.frame = bounds
         addSubview(backdrop)
+        if ringColor != nil {
+            let ring = RingView(frame: bounds)
+            ring.autoresizingMask = [.width, .height]
+            ring.owner = self
+            addSubview(ring)
+        }
+    }
+
+    fileprivate func drawRing(in bounds: CGRect) {
+        guard let ringColor else { return }
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: ringWidth / 2, dy: ringWidth / 2),
+                                xRadius: cornerRadius - ringWidth / 2, yRadius: cornerRadius - ringWidth / 2)
+        path.lineWidth = ringWidth
+        ringColor.setStroke()
+        path.stroke()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func mouseDown(with event: NSEvent) {}
+}
+
+/// 玻璃面板上的描边层
+final class RingView: NSView {
+    weak var owner: GlassPanelView?
+    override func draw(_ dirtyRect: NSRect) { owner?.drawRing(in: bounds) }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// 玻璃边框：四条玻璃条拼成一圈，macOS 26+ 用容器视图把它们融合成连续的框

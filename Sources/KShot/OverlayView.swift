@@ -55,13 +55,16 @@ final class OverlayView: NSView {
     private let options = OptionsView()
     private let sizeLabel = SizeLabelView()
     private let hoverFrame = GlassFrameView(tint: NSColor.wechatGreen.withAlphaComponent(0.45))
+    private let handleViews: [GlassPanelView] = Handle.all.map { _ in
+        GlassPanelView(cornerRadius: OverlayView.handleRadius, tint: NSColor.wechatGreen.withAlphaComponent(0.7), ringColor: .white, ringWidth: 1.5)
+    }
     private var textEditor: TextEditorView?
     private var textGlass: GlassPanelView?
     private static let textGlassInset = CGSize(width: 8, height: 5)
 
     private static let dimAlpha: CGFloat = 0.42
     private static let fullScreenDimAlpha: CGFloat = 0.25
-    private static let handleRadius: CGFloat = 4
+    private static let handleRadius: CGFloat = 7
     private static let handleHitSlop: CGFloat = 8
 
     override var isFlipped: Bool { true }
@@ -87,6 +90,11 @@ final class OverlayView: NSView {
         sizeLabel.isHidden = true
         hoverFrame.isHidden = true
         addSubview(hoverFrame)
+        for h in handleViews {
+            h.isHidden = true
+            h.frame = CGRect(x: 0, y: 0, width: OverlayView.handleRadius * 2, height: OverlayView.handleRadius * 2)
+            addSubview(h)
+        }
         addSubview(sizeLabel)
         addSubview(toolbar)
         addSubview(options)
@@ -157,20 +165,6 @@ final class OverlayView: NSView {
             ctx.stroke(cut.insetBy(dx: -1, dy: -1))
         }
 
-        // 5. 把手
-        if showsHandles, let sel = selection {
-            for h in Handle.all {
-                let p = h.point(in: sel)
-                let r = OverlayView.handleRadius
-                let rect = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
-                ctx.setFillColor(NSColor.white.cgColor)
-                ctx.fillEllipse(in: rect)
-                ctx.setStrokeColor(NSColor.wechatGreen.cgColor)
-                ctx.setLineWidth(1.5)
-                ctx.strokeEllipse(in: rect)
-            }
-        }
-
     }
 
     /// 绘制前同步尺寸标签与悬停玻璃框（子视图）。
@@ -179,6 +173,22 @@ final class OverlayView: NSView {
         super.viewWillDraw()
         updateSizeLabel()
         updateHoverFrame()
+        updateHandles()
+    }
+
+    /// 把手：8 个带白色描边的小玻璃圆点
+    private func updateHandles() {
+        guard showsHandles, let sel = selection else {
+            handleViews.forEach { $0.isHidden = true }
+            return
+        }
+        let r = OverlayView.handleRadius
+        for (i, h) in Handle.all.enumerated() {
+            let p = h.point(in: sel)
+            let f = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
+            if handleViews[i].frame != f { handleViews[i].frame = f }
+            handleViews[i].isHidden = false
+        }
     }
 
     private func updateHoverFrame() {
