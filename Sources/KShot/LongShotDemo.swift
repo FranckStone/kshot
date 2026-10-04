@@ -46,7 +46,7 @@ enum LongShotDemo {
                 // 模拟人手滚动：步长不一、偶尔往回滚、速度忽快忽慢，滚到底后按“完成”
                 let steps: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 260, 110, -40, 180, 90, 240, 300, 120, 160, 80, 200, 150, 100, 90, 60]
                 var i = 0
-                func next() {
+                @MainActor func next() {
                     guard i < steps.count else {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { MainActor.assumeIsolated { session.debugFinish() } }
                         return
