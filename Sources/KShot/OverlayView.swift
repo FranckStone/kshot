@@ -855,6 +855,21 @@ final class SelfTest {
             o.debugDrag([CGPoint(x: 100, y: 200), CGPoint(x: 300, y: 350), CGPoint(x: 700, y: 620)])
         }
         t.add("nudge-right") { o.debugKey(code: 124, chars: "") }
+        if CommandLine.arguments.contains("--pin-test") {
+            t.add("pin") {
+                o.debugAction(.pin)
+                let url = t.dir.appendingPathComponent("screen.png")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    Task { @MainActor in
+                        if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
+                            try? data.write(to: url)
+                            Log.info("pin screen captured")
+                        }
+                    }
+                }
+            }
+            return t
+        }
         t.add("confirm") {
             o.debugKey(code: 36, chars: "\r")
             // 把剪贴板里的图片写出来核对
