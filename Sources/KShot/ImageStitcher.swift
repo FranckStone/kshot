@@ -37,6 +37,8 @@ final class ImageStitcher {
     /// 锚点：最后一次拼接进去的帧，新帧都和它比
     private var previous: Frame?
     private var footerStrip: CGImage?
+    /// 上一次拼入的滚动量：手动模式下用作下一帧的预期值（滚动速度连续）
+    private var lastShift = 0
     private let maxTotalHeight: Int
     private static let sampleColumns = 64
 
@@ -78,7 +80,8 @@ final class ImageStitcher {
         let bandBottom = h - footer
         guard bandBottom - bandTop > 24 else { return .noMatch }
 
-        guard let (shift, score) = Self.findShift(prev: prev, next: frame, top: bandTop, bottom: bandBottom, expected: expectedShift) else {
+        let expected = expectedShift > 0 ? expectedShift : lastShift
+        guard let (shift, score) = Self.findShift(prev: prev, next: frame, top: bandTop, bottom: bandBottom, expected: expected) else {
             lastDiagnostics = Self.lastFailure
             lastDiagnostics.header = header
             lastDiagnostics.footer = footer
@@ -88,7 +91,13 @@ final class ImageStitcher {
         }
         lastDiagnostics = Diagnostics(shift: shift, score: score, header: header, footer: footer)
         guard shift > 0, totalHeight + shift <= maxTotalHeight else { return .unchanged }
+        // 撕裂检测：要追加的那段若和上一帧同位置的内容一样（且有纹理），说明这部分还没刷新，丢弃本帧
+        if Self.isStale(prev: prev, next: frame, from: bandBottom - shift, to: bandBottom) {
+            lastDiagnostics.reason = "stale"
+            return .noMatch
+        }
         previous = frame
+        lastShift = shift
 
         // 记住底栏（最后补一次）；首次发现底栏时，把第一帧条带底部的底栏裁掉，避免重复
         if footer > 0 {
@@ -138,6 +147,16 @@ final class ImageStitcher {
             ctx.draw(strip, in: CGRect(x: 0, y: y, width: strip.width, height: strip.height))
         }
         return ctx.makeImage()
+    }
+
+    /// [from, to) 范围内有纹理的行，是否绝大多数与上一帧同位置完全相同（= 未刷新的旧内容）
+    private static func isStale(prev: Frame, next: Frame, from: Int, to: Int) -> Bool {
+        var textured = 0, same = 0
+        for i in from..<to where next.textured[i] {
+            textured += 1
+            if rowDiff(prev.rows[i], next.rows[i]) < 2.0 { same += 1 }
+        }
+        return textured >= 6 && Double(same) / Double(textured) > 0.8
     }
 
     // MARK: - 固定区域
