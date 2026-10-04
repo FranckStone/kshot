@@ -13,6 +13,7 @@ final class LongScreenshotSession {
     private var running = false
     private var frames = 0
     private var staticCount = 0
+    private var noMatchCount = 0
     private var autoScroll = false
     private var excluded: Set<CGWindowID> = []
     private var capturer: RegionCapturer?
@@ -102,6 +103,7 @@ final class LongScreenshotSession {
             case .appended(let rows):
                 frames += 1
                 staticCount = 0
+                noMatchCount = 0
                 dump(frame.image)
                 let d = stitcher.lastDiagnostics
                 Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", d.score)), header \(d.header), footer \(d.footer)), total \(stitcher.totalHeight)")
@@ -117,9 +119,12 @@ final class LongScreenshotSession {
                 hint("往回滚了，继续向下滚动即可")
             case .noMatch:
                 staticCount = 0
+                noMatchCount += 1
+                // 偶尔一帧接不上多半是渲染中的撕裂画面，连续多帧才提示
+                guard noMatchCount >= (autoScroll ? 3 : 6) else { continue }
                 dump(frame.image)
                 let d = stitcher.lastDiagnostics
-                Log.info("longshot no match (header \(d.header), footer \(d.footer))")
+                Log.info("longshot no match x\(noMatchCount) (header \(d.header), footer \(d.footer))")
                 hint(autoScroll ? "画面变化太大，已暂停自动滚动" : "滚得太快，接不上了：请往回滚一点再继续")
                 if autoScroll { autoScroll = false; panel.setAuto(false) }
             }

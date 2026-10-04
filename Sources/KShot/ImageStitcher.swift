@@ -179,7 +179,9 @@ final class ImageStitcher {
             let sc = score(s, step: 1)
             if sc < best.score { best = (s, sc) }
         }
-        guard best.score < 8 else { return nil }
+        guard best.score < 6 else { return nil }
+        // 重叠区上下两半分别校验：撕裂帧（一半已刷新、一半未刷新）整体得分可能仍低，但必有一半对不上
+        if !halvesAgree(prev: prev, next: next, top: top, bandH: bandH, shift: best.shift) { return nil }
 
         // 内容单调（大片空白）时很多候选几乎同分：只有在最优解本身已接近完美、且候选确实多到分不清时，才取最接近预期滚动量的
         if expected > 0, best.score < 1.0 {
@@ -195,6 +197,17 @@ final class ImageStitcher {
             }
         }
         return (best.shift, best.score)
+    }
+
+    private static func halvesAgree(prev: Frame, next: Frame, top: Int, bandH: Int, shift: Int) -> Bool {
+        let overlap = bandH - shift
+        let skip = overlap / 10
+        let usable = overlap - skip
+        guard usable >= 16 else { return true }
+        let half = usable / 2
+        let a = meanDiff(prev.rows, next.rows, aStart: top + shift + skip, bStart: top + skip, count: half, step: 1)
+        let b = meanDiff(prev.rows, next.rows, aStart: top + shift + skip + half, bStart: top + skip + half, count: usable - half, step: 1)
+        return a < 6 && b < 6
     }
 
     /// a[aStart + i] 与 b[bStart + i] 的平均绝对差
