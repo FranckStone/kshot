@@ -66,6 +66,10 @@ final class OverlayView: NSView {
     private static let fullScreenDimAlpha: CGFloat = 0.25
     private static let handleRadius: CGFloat = 7
     private static let handleHitSlop: CGFloat = 8
+    /// 屏幕物理圆角（MacBook 刘海屏约 12pt；外接直角屏幕上圆角也无伤大雅）
+    private static let screenCornerRadius: CGFloat = 12
+    /// macOS 窗口圆角
+    private static let windowCornerRadius: CGFloat = 10
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -197,10 +201,13 @@ final class OverlayView: NSView {
             return
         }
         let t = GlassFrameView.thickness
-        // 整屏时玻璃框贴在屏幕边缘内侧
-        let f = rect == bounds ? bounds : rect.insetBy(dx: -t, dy: -t)
-        if hoverFrame.frame != f {
+        let isFullScreen = rect == bounds
+        // 整屏时玻璃框贴在屏幕边缘内侧，并用屏幕角的弧度；窗口时略大于窗口圆角
+        let f = isFullScreen ? bounds : rect.insetBy(dx: -t, dy: -t)
+        let radius: CGFloat = isFullScreen ? OverlayView.screenCornerRadius : OverlayView.windowCornerRadius + t
+        if hoverFrame.frame != f || hoverFrame.cornerRadius != radius {
             hoverFrame.frame = f
+            hoverFrame.cornerRadius = radius
             hoverFrame.needsLayout = true
         }
         hoverFrame.isHidden = false

@@ -128,46 +128,24 @@ final class RingView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// 玻璃边框：四条玻璃条拼成一圈，macOS 26+ 用容器视图把它们融合成连续的框
+/// 玻璃边框：一整块圆角玻璃，用遮罩抠掉中间，只留下一圈环
 final class GlassFrameView: NSView {
     static let thickness: CGFloat = 4
-    private var strips: [NSView] = []
-    private var host: NSView?
+    /// 外侧圆角半径（整屏时取屏幕角的弧度，窗口时取窗口圆角）
+    var cornerRadius: CGFloat = 0 { didSet { needsLayout = true } }
+
+    private let glass: NSView
+    private let maskLayer = CAShapeLayer()
 
     override var isFlipped: Bool { true }
 
     init(tint: NSColor?) {
+        glass = GlassBackdrop.make(cornerRadius: 0, content: NSView(), tint: tint)
         super.init(frame: .zero)
         wantsLayer = true
-        if #available(macOS 26.0, *) {
-            let container = NSGlassEffectContainerView()
-            container.spacing = 12
-            let content = NSView()
-            container.contentView = content
-            for _ in 0..<4 {
-                let g = NSGlassEffectView()
-                g.cornerRadius = GlassFrameView.thickness / 2
-                g.tintColor = tint
-                content.addSubview(g)
-                strips.append(g)
-            }
-            addSubview(container)
-            host = container
-        } else {
-            let content = NSView()
-            for _ in 0..<4 {
-                let v = NSVisualEffectView()
-                v.material = .popover
-                v.blendingMode = .withinWindow
-                v.state = .active
-                v.wantsLayer = true
-                v.layer?.cornerRadius = GlassFrameView.thickness / 2
-                content.addSubview(v)
-                strips.append(v)
-            }
-            addSubview(content)
-            host = content
-        }
+        addSubview(glass)
+        maskLayer.fillRule = .evenOdd
+        layer?.mask = maskLayer
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -176,13 +154,18 @@ final class GlassFrameView: NSView {
         super.layout()
         let t = GlassFrameView.thickness
         let b = bounds
-        host?.frame = b
-        if #available(macOS 26.0, *), let c = host as? NSGlassEffectContainerView { c.contentView?.frame = b }
-        guard strips.count == 4 else { return }
-        strips[0].frame = CGRect(x: 0, y: 0, width: b.width, height: t)                // 上
-        strips[1].frame = CGRect(x: 0, y: b.height - t, width: b.width, height: t)     // 下
-        strips[2].frame = CGRect(x: 0, y: 0, width: t, height: b.height)               // 左
-        strips[3].frame = CGRect(x: b.width - t, y: 0, width: t, height: b.height)     // 右
+        glass.frame = b
+        let outerR = max(cornerRadius, t)
+        if #available(macOS 26.0, *), let g = glass as? NSGlassEffectView { g.cornerRadius = outerR }
+        else { glass.layer?.cornerRadius = outerR }
+        // 环形遮罩：外圆角矩形 - 内圆角矩形
+        let path = CGMutablePath()
+        path.addRoundedRect(in: b, cornerWidth: outerR, cornerHeight: outerR)
+        let inner = b.insetBy(dx: t, dy: t)
+        let innerR = max(0, outerR - t)
+        path.addRoundedRect(in: inner, cornerWidth: innerR, cornerHeight: innerR)
+        maskLayer.frame = b
+        maskLayer.path = path
     }
 
     /// 纯装饰，鼠标事件穿透到遮罩层（否则会吞掉点击，导致无法选区）
