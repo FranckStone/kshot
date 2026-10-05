@@ -136,9 +136,12 @@ final class LongScreenshotSession {
         } else {
             outcome = stitcher.push(frame: frame, expectedShift: workerAuto ? workerExpected : 0)
         }
-        if ProcessInfo.processInfo.environment["KSHOT_TRACE"] != nil || CommandLine.arguments.contains("--trace") {
-            let d = stitcher.lastDiagnostics
-            Log.info("trace outcome=\(outcome) shift=\(d.shift) rough=\(String(format: "%.1f", d.rough)) src=\(d.reason) h=\(frame.height)")
+        do {
+            // 逐帧记录，便于事后定位拼接错误（unchanged 太多，不记）
+            if case .unchanged = outcome {} else {
+                let d = stitcher.lastDiagnostics
+                Log.info("frame \(outcome) shift=\(d.shift) rough=\(String(format: "%.1f", d.rough)) diff=\(String(format: "%.2f", d.score)) src=\(d.reason) \(stitcher.debugState)")
+            }
         }
         var preview: CGImage?
         switch outcome {

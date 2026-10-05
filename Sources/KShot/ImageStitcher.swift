@@ -3,7 +3,10 @@ import AppKit
 /// 长截图拼接：比较相邻两帧，找出内容向上滚动的像素距离，把新露出的部分接到底部。
 /// 会自动识别固定不动的顶栏 / 底栏（同一位置内容不变的行），匹配与追加时跳过它们，底栏在最后补一次。
 final class ImageStitcher: @unchecked Sendable {
-    struct Frame {
+    final class Frame: @unchecked Sendable {
+        init(image: CGImage, width: Int, height: Int, rows: [[UInt8]], textured: [Bool]) {
+            self.image = image; self.width = width; self.height = height; self.rows = rows; self.textured = textured
+        }
         let image: CGImage
         let width: Int
         let height: Int
@@ -44,6 +47,16 @@ final class ImageStitcher: @unchecked Sendable {
     /// 锚点：最后一次成功匹配的帧
     private var anchor: Frame?
     private var anchorY = 0
+    private var failStreak = 0
+    /// 固定栏候选：同一高度（±2px）连续出现的次数，达到 3 次才认定
+    private var headerCandidate = (h: 0, n: 0)
+    private var footerCandidate = (h: 0, n: 0)
+    /// 画布最上 / 最下一行分别取自帧内第几行（固定栏确认后用来裁掉已混进来的栏）
+    private var topEdgeFrameRow = 0
+    private var bottomEdgeFrameRow = 0
+    /// 关键帧：已放到画布上的帧（间隔约 1/3 屏），接不上当前锚点时用来找回位置
+    private var keyframes: [(frame: Frame, y: Int)] = []
+    private let maxKeyframes = 40
     /// 固定顶栏 / 底栏（一旦识别就保持，取历次最大值）
     private var stickyTop = 0
     private var stickyFooter = 0
@@ -65,6 +78,9 @@ final class ImageStitcher: @unchecked Sendable {
 
     var width: Int { anchor?.width ?? 0 }
 
+    /// 调试：当前锚点在画布上的位置与已提交范围
+    var debugState: String { "anchorY=\(anchorY) committed=[\(committedMin.map(String.init) ?? "nil"),\(committedMax)) top=\(stickyTop) footer=\(stickyFooter)" }
+
     /// 当前已拼接高度（含固定栏）
     var totalHeight: Int {
         guard let a = anchor else { return 0 }
@@ -85,12 +101,44 @@ final class ImageStitcher: @unchecked Sendable {
     /// 喂入一帧。expectedShift 仅为兼容旧调用保留。
     func push(frame: Frame, expectedShift: Int = 0) -> Outcome {
         guard let prev = anchor else {
+            // 起点：直接用第一帧；若它是过渡画面，后面连续接不上时会自动换掉
             anchor = frame
             anchorY = 0
+            keyframes = [(frame, 0)]
             return .appended(rows: frame.height)
         }
         guard prev.width == frame.width, prev.height == frame.height else { return .noMatch }
-        if Self.isSame(prev, frame) { return .unchanged }
+        if Self.isSame(prev, frame) { failStreak = 0; return .unchanged }
+
+        let outcome = place(frame, relativeTo: prev, at: anchorY)
+        if case .noMatch = outcome {
+            failStreak += 1
+            if committedMin == nil {
+                // 还没拼进内容：连续接不上说明起点帧不对（过渡画面），换成当前帧
+                if failStreak >= 4 {
+                    anchor = frame; anchorY = 0; keyframes = [(frame, 0)]; failStreak = 0
+                    lastDiagnostics.reason += " re-anchor"
+                }
+                return .noMatch
+            }
+            // 已有内容：和关键帧逐个比，找回位置（从最近的开始）
+            for k in keyframes.reversed() where k.frame !== prev {
+                let saved = (anchor, anchorY)
+                anchor = k.frame; anchorY = k.y
+                let o = place(frame, relativeTo: k.frame, at: k.y)
+                if case .noMatch = o { anchor = saved.0; anchorY = saved.1; continue }
+                failStreak = 0
+                lastDiagnostics.reason += " via-keyframe"
+                return o
+            }
+            return .noMatch
+        }
+        failStreak = 0
+        return outcome
+    }
+
+    /// 尝试把 frame 放到画布上：ref 是已在画布上的帧，refY 是它的位置
+    private func place(_ frame: Frame, relativeTo prev: Frame, at refY: Int) -> Outcome {
 
         let h = frame.height
         let footerRuns = Self.staticRuns(prev, frame, fromTop: false)
@@ -133,11 +181,22 @@ final class ImageStitcher: @unchecked Sendable {
         guard v.ok else { return .noMatch }
         if s == 0 { return .unchanged }
 
-        // 3. 固定栏：取历次最大值（只看有纹理的部分，紧挨着的空白行归内容）
-        stickyTop = max(stickyTop, headerRuns.textured)
-        stickyFooter = max(stickyFooter, footerRuns.textured)
+        // 3. 固定栏：同一高度连续 3 次匹配都静止才认定（避免内容恰好相同被误判），一旦认定就保持
+        func confirm(_ cand: inout (h: Int, n: Int), _ detected: Int) -> Int? {
+            guard detected > 0 else { cand = (0, 0); return nil }
+            if abs(cand.h - detected) <= 2 { cand.n += 1; cand.h = max(cand.h, detected) } else { cand = (detected, 1) }
+            return cand.n >= 3 ? cand.h : nil
+        }
+        if let t = confirm(&headerCandidate, headerRuns.textured), t > stickyTop {
+            stickyTop = t
+            trimTopEdge(toFrameRow: t)
+        }
+        if let f = confirm(&footerCandidate, footerRuns.textured), f > stickyFooter {
+            stickyFooter = f
+            trimBottomEdge(toFrameRow: h - f)
+        }
         let top = stickyTop, bottom = h - stickyFooter
-        let frameY = anchorY + s
+        let frameY = refY + s
 
         // 4. 首次移动：把锚点帧中部以上的内容作为起点写入
         if committedMin == nil {
@@ -148,6 +207,8 @@ final class ImageStitcher: @unchecked Sendable {
                 downStrips = [img]
                 committedMin = anchorY + first.0
                 committedMax = anchorY + first.1
+                topEdgeFrameRow = first.0
+                bottomEdgeFrameRow = first.1
             }
         }
         let before = totalHeight
@@ -179,6 +240,10 @@ final class ImageStitcher: @unchecked Sendable {
         anchor = frame
         anchorY = frameY
         lastShift = s
+        if let last = keyframes.last, abs(last.y - frameY) >= frame.height / 3 {
+            keyframes.append((frame, frameY))
+            if keyframes.count > maxKeyframes { keyframes.removeFirst() }
+        }
         return .appended(rows: max(0, totalHeight - before))
     }
 
@@ -189,6 +254,31 @@ final class ImageStitcher: @unchecked Sendable {
               let img = f.image.cropping(to: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
         downStrips.append(img)
         committedMax = frameY + endRow
+        bottomEdgeFrameRow = endRow
+    }
+
+    /// 顶栏确认后：画布最上面若混进了栏的行（取自帧内 < row 的行），裁掉
+    private func trimTopEdge(toFrameRow row: Int) {
+        let n = row - topEdgeFrameRow
+        guard n > 0, let cMin = committedMin else { return }
+        if var s = upStrips.last, s.height > n, let c = s.cropping(to: CGRect(x: 0, y: n, width: s.width, height: s.height - n)) {
+            s = c; upStrips[upStrips.count - 1] = s
+        } else if upStrips.isEmpty, let s = downStrips.first, s.height > n,
+                  let c = s.cropping(to: CGRect(x: 0, y: n, width: s.width, height: s.height - n)) {
+            downStrips[0] = c
+        } else { return }
+        committedMin = cMin + n
+        topEdgeFrameRow = row
+    }
+
+    /// 底栏确认后：画布最下面若混进了栏的行，裁掉
+    private func trimBottomEdge(toFrameRow row: Int) {
+        let n = bottomEdgeFrameRow - row
+        guard n > 0, let s = downStrips.last, s.height > n,
+              let c = s.cropping(to: CGRect(x: 0, y: 0, width: s.width, height: s.height - n)) else { return }
+        downStrips[downStrips.count - 1] = c
+        committedMax -= n
+        bottomEdgeFrameRow = row
     }
 
     /// 把 frame 中 [startRow, committedMin - frameY) 行接到画布顶部
@@ -199,6 +289,7 @@ final class ImageStitcher: @unchecked Sendable {
               let img = f.image.cropping(to: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
         upStrips.append(img)
         committedMin = frameY + startRow
+        topEdgeFrameRow = startRow
     }
 
     /// 结束时把锚点帧里还没写入的上下两端补上

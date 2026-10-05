@@ -16,7 +16,9 @@ enum LongShotDemo {
         win.isReleasedWhenClosed = false
         let scroll = NSScrollView(frame: CGRect(origin: .zero, size: size))
         scroll.hasVerticalScroller = true
-        let doc = TallContentView(frame: CGRect(x: 0, y: 0, width: size.width, height: 2600))
+        let chat = CommandLine.arguments.contains("--chat")
+        let doc: NSView = chat ? ChatContentView(frame: CGRect(x: 0, y: 0, width: size.width, height: 3200))
+                               : TallContentView(frame: CGRect(x: 0, y: 0, width: size.width, height: 2600))
         scroll.documentView = doc
         win.contentView = scroll
         win.makeKeyAndOrderFront(nil)
@@ -31,7 +33,14 @@ enum LongShotDemo {
         let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/KShot-selftest")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        let manual = CommandLine.arguments.contains("--manual")
+        let manual = CommandLine.arguments.contains("--manual") || CommandLine.arguments.contains("--up")
+        let upward = CommandLine.arguments.contains("--up")
+        if upward {
+            // 先滚到底部，再从底部往上截
+            let clip = scroll.contentView
+            clip.scroll(to: CGPoint(x: 0, y: max(0, doc.bounds.height - clip.bounds.height)))
+            scroll.reflectScrolledClipView(clip)
+        }
         func scrollBy(_ step: CGFloat) {
             let clip = scroll.contentView
             let maxY = max(0, doc.bounds.height - clip.bounds.height)
@@ -44,7 +53,10 @@ enum LongShotDemo {
             session.customScroller = { step in scrollBy(step) }
             if manual {
                 // 模拟人手滚动：步长不一、偶尔往回滚、速度忽快忽慢，滚到底后按“完成”
-                let steps: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 220, 110, -40, 180, 90, 200, 220, 120, 160, 80, 200, 150, 100, 90, 60, 120, 150, 100]
+                let down: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 220, 110, -40, 180, 90, 200, 220, 120, 160, 80, 200, 150, 100, 90, 60, 120, 150, 100]
+                // 往上：步长不一、偶尔往下回弹、中途停顿（0 = 停一下）
+                let up: [CGFloat] = [-40, -90, -130, -60, 0, -180, -220, 30, -100, -160, -200, 0, -80, -240, -120, 20, -150, -200, -90, -60, 0, -170, -210, -130, -100, -180, -220, -150, -120, -200, -160, -140]
+                let steps = upward ? up : down
                 var i = 0
                 @MainActor func next() {
                     guard i < steps.count else {
@@ -61,6 +73,7 @@ enum LongShotDemo {
                 // 真值：把整个文档视图直接渲染出来，和拼接结果逐像素比对（采样列避开右侧滚动条）
                 guard let rep = doc.bitmapImageRepForCachingDisplay(in: doc.bounds) else { return }
                 doc.cacheDisplay(in: doc.bounds, to: rep)
+                if let t = rep.cgImage, let data = Exporter.pngData(t) { try? data.write(to: dir.appendingPathComponent("truth.png")) }
                 guard let truth = rep.cgImage,
                       let fa = ImageStitcher.makeFrame(result), let fb = ImageStitcher.makeFrame(truth) else { return }
                 let rows = min(fa.rows.count, fb.rows.count)
@@ -133,6 +146,44 @@ final class TallContentView: NSView {
             NSAttributedString(string: String(format: "第 %03d 行  y=%.0f", n, y), attributes: attrs).draw(at: CGPoint(x: 16, y: y))
             NSColor(white: 0.9, alpha: 1).setFill(); CGRect(x: 0, y: y + 30, width: bounds.width, height: 1).fill()
             y += 40; n += 1
+        }
+    }
+}
+
+
+/// 类似聊天记录的内容：大量留白、相似的段落和列表，文字稀疏（最容易匹配错的情况）
+final class ChatContentView: NSView {
+    override var isFlipped: Bool { true }
+    private var blocks: [(CGFloat, String, Bool)] = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        let lines = ["好的，我来看一下日志。", "已修复，新版已安装。", "• 每次匹配都要校验重叠区。", "• 往上、往下滚都能补充内容。",
+                     "验证结果", "还是不行", "离线：固定步长、随机步长含回滚", "真实屏幕：手动滚动和自动滚动",
+                     "Ran 2 commands", "Finished a background task", "请在同一个聊天窗口里再试一次。"]
+        var y: CGFloat = 24
+        var i = 0
+        while y < frame.height - 40 {
+            let isUser = i % 7 == 3
+            blocks.append((y, "\(i + 1). " + lines[i % lines.count], isUser))
+            y += isUser ? 70 : (i % 3 == 0 ? 56 : 30)
+            i += 1
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill(); bounds.fill()
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor(white: 0.15, alpha: 1)]
+        for (y, text, isUser) in blocks where y > dirtyRect.minY - 40 && y < dirtyRect.maxY + 40 {
+            if isUser {
+                let r = CGRect(x: bounds.width - 260, y: y - 8, width: 230, height: 36)
+                NSColor(white: 0.93, alpha: 1).setFill()
+                NSBezierPath(roundedRect: r, xRadius: 14, yRadius: 14).fill()
+                NSAttributedString(string: text, attributes: attrs).draw(at: CGPoint(x: r.minX + 14, y: y))
+            } else {
+                NSAttributedString(string: text, attributes: attrs).draw(at: CGPoint(x: 28, y: y))
+            }
         }
     }
 }

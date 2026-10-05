@@ -16,7 +16,9 @@ enum StitchTest {
             }
             var outcomes: [String] = []
             for f in frames {
-                switch stitcher.push(f, expectedShift: 250) {
+                let o = stitcher.push(f, expectedShift: 250)
+                if name == "fixed" { print("   fixed: \(o) shift=\(stitcher.lastDiagnostics.shift) src=\(stitcher.lastDiagnostics.reason) h=\(stitcher.lastDiagnostics.header) f=\(stitcher.lastDiagnostics.footer) \(stitcher.debugState)") }
+                switch o {
                 case .appended(let r): outcomes.append("+\(r)")
                 case .unchanged: outcomes.append("=")
                 case .scrolledUp: outcomes.append("^")
@@ -121,6 +123,28 @@ enum StitchTest {
         ctx.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1))
         ctx.fillEllipse(in: CGRect(x: w / 2 - 20, y: 30, width: 40, height: 40))
         run("overlay", overlay, expected: ctx.makeImage()!)
+
+        // 4. 聊天式内容，从底部往上滚到顶（与真实失败场景一致）
+        let chatView = ChatContentView(frame: CGRect(x: 0, y: 0, width: 720, height: 3200))
+        if let rep = chatView.bitmapImageRepForCachingDisplay(in: chatView.bounds) {
+            chatView.cacheDisplay(in: chatView.bounds, to: rep)
+            if let chatImg = rep.cgImage {
+                let vp = 936, H = chatImg.height
+                func cc(_ y: Int) -> CGImage { chatImg.cropping(to: CGRect(x: 0, y: y, width: chatImg.width, height: vp))! }
+                var frames: [CGImage] = []
+                var y = H - vp
+                let ups = [80, 180, 260, 120, 360, 440, -60, 200, 320, 400, 160, 480, 240, -40, 300, 400, 180, 120, 340, 420, 260, 200, 360, 440, 300, 240, 400, 440, 320, 280]
+                frames.append(cc(y))
+                for u in ups { y = max(0, min(H - vp, y - u)); frames.append(cc(y)); if y == 0 { break } }
+                run("chat-up", frames, expected: chatImg)
+                // 同样内容往下
+                var downFrames: [CGImage] = []
+                y = 0
+                downFrames.append(cc(y))
+                for u in ups { y = max(0, min(H - vp, y + u)); downFrames.append(cc(y)); if y == H - vp { break } }
+                run("chat-down", downFrames, expected: chatImg)
+            }
+        }
     }
 
     /// 有纹理的横条（模拟固定的工具栏/输入框）
