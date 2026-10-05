@@ -148,10 +148,13 @@ final class OverlayView: NSView {
         ctx.restoreGState()
 
         // 4. 边框（悬停状态用玻璃框子视图，选区用细线）
-        if let cut, selection != nil {
+        if let cut, let sel = selection, !isFullScreen(sel) {
             ctx.setStrokeColor(NSColor.accentGreen.cgColor)
             ctx.setLineWidth(1.5)
-            ctx.stroke(cut.insetBy(dx: -0.75, dy: -0.75))
+            // 线画在选区外侧；贴着屏幕边缘的那几条边改画在内侧，否则会落到屏幕外
+            let outer = cut.insetBy(dx: -0.75, dy: -0.75)
+            let line = outer.intersection(bounds.insetBy(dx: 0.75, dy: 0.75))
+            ctx.stroke(line.isNull ? outer : line)
         }
 
         // 5. 放大镜
@@ -193,8 +196,9 @@ final class OverlayView: NSView {
             return
         }
         let r = OverlayView.handleRadius
+        let hr = handleRect(for: sel)
         for (i, h) in Handle.all.enumerated() {
-            let p = h.point(in: sel)
+            let p = h.point(in: hr)
             let f = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
             if handleViews[i].frame != f { handleViews[i].frame = f }
             handleViews[i].isHidden = false
@@ -202,12 +206,19 @@ final class OverlayView: NSView {
     }
 
     private func updateHoverFrame() {
-        guard selection == nil, let rect = hoverRect else {
+        let rect: CGRect
+        if let sel = selection {
+            // 整屏选中：沿用贴合屏幕圆角的玻璃框（细绿线会落到屏幕外看不见）
+            guard isFullScreen(sel) else { hoverFrame.isHidden = true; return }
+            rect = bounds
+        } else if let h = hoverRect {
+            rect = h
+        } else {
             hoverFrame.isHidden = true
             return
         }
         let t = GlassFrameView.thickness
-        let isFullScreen = rect == bounds
+        let isFullScreen = self.isFullScreen(rect)
         // 整屏时玻璃框贴在屏幕边缘内侧，并用屏幕角的弧度；窗口时略大于窗口圆角
         let f = isFullScreen ? bounds : rect.insetBy(dx: -t, dy: -t)
         let radius: CGFloat = isFullScreen ? OverlayView.screenCornerRadius : OverlayView.windowCornerRadius + t
@@ -217,6 +228,12 @@ final class OverlayView: NSView {
             hoverFrame.needsLayout = true
         }
         hoverFrame.isHidden = false
+    }
+
+    /// 选区（或悬停区域）是否基本等于整块屏幕
+    private func isFullScreen(_ r: CGRect) -> Bool {
+        abs(r.minX - bounds.minX) < 2 && abs(r.minY - bounds.minY) < 2 &&
+            abs(r.maxX - bounds.maxX) < 2 && abs(r.maxY - bounds.maxY) < 2
     }
 
     private func updateSizeLabel() {
@@ -559,8 +576,20 @@ final class OverlayView: NSView {
 
     // MARK: - 选区几何
 
+    /// 把手所在的矩形：选区贴着屏幕边缘时向内收，保证把手完整可见、不被屏幕圆角挡住
+    private func handleRect(for sel: CGRect) -> CGRect {
+        let m = OverlayView.handleRadius + 4
+        let inner = bounds.insetBy(dx: m, dy: m)
+        let r = CGRect(x: max(sel.minX, inner.minX), y: max(sel.minY, inner.minY),
+                       width: 0, height: 0)
+        let maxX = min(sel.maxX, inner.maxX), maxY = min(sel.maxY, inner.maxY)
+        guard maxX > r.minX, maxY > r.minY else { return sel }
+        return CGRect(x: r.minX, y: r.minY, width: maxX - r.minX, height: maxY - r.minY)
+    }
+
     private func handle(at p: CGPoint, in sel: CGRect) -> Handle? {
-        for h in Handle.all where h.point(in: sel).distance(to: p) <= OverlayView.handleHitSlop {
+        let hr = handleRect(for: sel)
+        for h in Handle.all where h.point(in: hr).distance(to: p) <= OverlayView.handleHitSlop {
             return h
         }
         return nil
@@ -1084,7 +1113,10 @@ final class SelfTest {
         let b = overlay.bounds
         let c = CGPoint(x: b.midX, y: b.midY)
         t.add("hover") { o.debugMove(to: c) }
-        t.add("click-window") { o.debugClick(at: c) }
+        if CommandLine.arguments.contains("--edge-test") {
+            t.add("fullscreen-select") { o.debugClick(at: CGPoint(x: 60, y: 300)) }
+            return t
+        }
         if CommandLine.arguments.contains("--loupe-test") {
             t.add("loupe-on") {
                 o.debugAction(.loupe)
