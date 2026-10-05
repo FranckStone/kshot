@@ -41,7 +41,7 @@ enum Toast {
 
         let w = NSPanel(contentRect: CGRect(origin: origin, size: content.frame.size), styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
-        w.level = .statusBar
+        w.level = .screenSaver + 1 // 截图遮罩（screenSaver）之上也能看到
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = true

@@ -11,6 +11,7 @@ enum ToolbarAction {
     case ocr
     case translate
     case redact
+    case loupe
     case save
     case cancel
     case confirm
@@ -188,6 +189,10 @@ final class ToolbarView: NSView {
         add(.tool(.blur), "drop.halffull", fallback: "drop", "模糊")
         add(.tool(.text), "text:T", "文字（双击文字可再编辑）")
         add(.tool(.step), "1.circle", "序号")
+        if mode == .screen {
+            add(.loupe, "eyedropper.halffull", fallback: "eyedropper", "放大镜取色（单击复制 HEX，⇧ 单击复制 RGB）")
+            loupeButton = items.last!.button
+        }
         separatorsAfter.insert(items.count - 1)
         add(.undo, "arrow.uturn.backward", "撤销  ⌘Z")
         undoButton = items.last!.button
@@ -241,6 +246,9 @@ final class ToolbarView: NSView {
     func setSelectedTool(_ tool: Tool) {
         for (t, b) in toolButtons { b.isActiveTool = (t == tool) }
     }
+
+    private var loupeButton: ToolButton?
+    func setLoupeActive(_ on: Bool) { loupeButton?.isActiveTool = on }
 
     func setUndoEnabled(_ enabled: Bool) {
         undoButton.isEnabled = enabled

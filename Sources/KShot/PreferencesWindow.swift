@@ -19,7 +19,7 @@ final class PreferencesWindow: NSWindow {
     private let repeatRecorder = HotKeyRecorder(defaultCombo: .repeatRegion)
     private let recordRecorder = HotKeyRecorder(defaultCombo: .record)
     private let hotKeyWarning = NSTextField(labelWithString: "")
-    private let magnifier = NSButton(checkboxWithTitle: "选区时显示放大镜和颜色值", target: nil, action: nil)
+    private let magnifier = NSButton(checkboxWithTitle: "框选时也显示放大镜（默认只在工具条点放大镜按钮后显示）", target: nil, action: nil)
     private let sound = NSButton(checkboxWithTitle: "截图完成时播放快门声", target: nil, action: nil)
     private let shadow = NSButton(checkboxWithTitle: "单击选中窗口后完成：输出带系统阴影的透明背景窗口图", target: nil, action: nil)
     private let cursor = NSButton(checkboxWithTitle: "录屏时录入鼠标指针", target: nil, action: nil)

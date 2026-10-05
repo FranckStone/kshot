@@ -160,7 +160,7 @@ enum Settings {
     }
     /// 选区时显示放大镜与颜色
     static var showMagnifier: Bool {
-        get { bool("showMagnifier", true) }
+        get { bool("showMagnifier", false) }
         set { setBool("showMagnifier", newValue) }
     }
     /// 记录截图历史

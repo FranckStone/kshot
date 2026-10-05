@@ -139,7 +139,7 @@ final class ImageEditorWindow: NSWindow {
             runOCR(translate: false)
         case .translate:
             runOCR(translate: true)
-        case .pin, .longShot, .record:
+        case .pin, .longShot, .record, .loupe:
             break
         }
     }

@@ -163,8 +163,13 @@ final class OverlayView: NSView {
 
     /// 选区阶段（悬停 / 框选 / 拖把手）显示放大镜
     private var showsLoupe: Bool {
-        guard Settings.showMagnifier, textEditor == nil else { return false }
+        guard textEditor == nil else { return false }
         if let p = mousePoint, !toolbar.isHidden, toolbar.frame.contains(p) { return false }
+        if let p = mousePoint, !options.isHidden, options.frame.contains(p) { return false }
+        // 选好区域后，由工具条上的放大镜按钮打开
+        if loupeOn, selection != nil, case .none = dragMode { return true }
+        // 选区阶段（悬停 / 框选 / 拖把手）：偏好设置里打开才显示
+        guard Settings.showMagnifier else { return false }
         switch dragMode {
         case .selecting, .resizing, .pending: return true
         case .none: return selection == nil && session.canHover(self)
@@ -286,6 +291,9 @@ final class OverlayView: NSView {
         needsDisplay = true
     }
 
+    /// 工具条上的“放大镜取色”是否打开
+    private var loupeOn = false
+
     /// 调试计数
     var debugMoveCount = 0
     var debugLoupeDraws = 0
@@ -315,6 +323,12 @@ final class OverlayView: NSView {
 
         guard let sel = selection else {
             dragMode = .pending(p)
+            return
+        }
+
+        // 放大镜取色：单击复制颜色，不结束截图
+        if loupeOn {
+            copyColor(at: p, rgb: event.modifierFlags.contains(.shift), endSession: false)
             return
         }
 
@@ -491,7 +505,7 @@ final class OverlayView: NSView {
         }
         // C / ⇧C：复制放大镜下的颜色（HEX / RGB）
         if chars.lowercased() == "c", target.showsLoupe, let p = target.mousePoint {
-            target.copyColor(at: p, rgb: flags.contains(.shift))
+            target.copyColor(at: p, rgb: flags.contains(.shift), endSession: !target.loupeOn)
             return
         }
         // 方向键：移动选中的标注，或微调选区
@@ -559,6 +573,10 @@ final class OverlayView: NSView {
         }
         if let ed = textEditor, ed.frame.contains(p) {
             NSCursor.iBeam.set()
+            return
+        }
+        if loupeOn, selection != nil {
+            NSCursor.crosshair.set()
             return
         }
         switch dragMode {
@@ -685,6 +703,7 @@ final class OverlayView: NSView {
         case .tool(let t):
             commitText()
             tool = (tool == t) ? .none : t
+            setLoupe(false)
             marks.deselect()
             updateToolbarState()
             layoutChrome()
@@ -698,10 +717,24 @@ final class OverlayView: NSView {
         case .ocr: recognizeText()
         case .translate: recognizeText(thenTranslate: true)
         case .redact: redact()
+        case .loupe:
+            commitText()
+            setLoupe(!loupeOn)
+            if loupeOn { tool = .none; marks.deselect() }
+            updateToolbarState()
+            layoutChrome()
+            if let w = window { mousePoint = convert(w.mouseLocationOutsideOfEventStream, from: nil) }
+            needsDisplay = true
         case .save: save()
         case .cancel: session.cancel()
         case .confirm: confirm()
         }
+    }
+
+    private func setLoupe(_ on: Bool) {
+        loupeOn = on
+        toolbar.setLoupeActive(on)
+        needsDisplay = true
     }
 
     private func updateToolbarState() {
@@ -803,13 +836,13 @@ final class OverlayView: NSView {
     }
 
     /// 复制放大镜下的颜色并结束截图
-    private func copyColor(at p: CGPoint, rgb: Bool) {
+    private func copyColor(at p: CGPoint, rgb: Bool, endSession: Bool = true) {
         guard let c = Loupe.color(at: p, shot: shot) else { return }
         let text = rgb ? "rgb(\(c.rgbText))" : c.hex
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
-        session.end()
+        if endSession { session.end() }
         Toast.show("已复制颜色 \(text)", symbol: "eyedropper")
     }
 
@@ -1052,6 +1085,15 @@ final class SelfTest {
         let c = CGPoint(x: b.midX, y: b.midY)
         t.add("hover") { o.debugMove(to: c) }
         t.add("click-window") { o.debugClick(at: c) }
+        if CommandLine.arguments.contains("--loupe-test") {
+            t.add("loupe-on") {
+                o.debugAction(.loupe)
+                o.debugMove(to: CGPoint(x: c.x + 60, y: c.y - 40))
+            }
+            t.add("loupe-move") { o.debugMove(to: CGPoint(x: c.x - 120, y: c.y + 80)) }
+            t.add("loupe-off") { o.debugAction(.loupe); o.debugMove(to: CGPoint(x: c.x - 100, y: c.y + 90)) }
+            return t
+        }
         t.add("move-selection") {
             guard let s = o.debugSelection else { return }
             let from = CGPoint(x: s.midX, y: s.midY)
