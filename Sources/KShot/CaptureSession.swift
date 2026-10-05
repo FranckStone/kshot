@@ -160,7 +160,7 @@ final class CaptureSession {
 
     /// 结束会话
     func end(restoreFocus: Bool = true) {
-        Log.info("session end (windows=\(windows.count))")
+        Log.info("session end (windows=\(windows.count)) moves=\(windows.map { $0.overlayView.debugMoveCount }) loupeDraws=\(windows.map { $0.overlayView.debugLoupeDraws }) appActive=\(NSApp.isActive) key=\(windows.map { $0.isKeyWindow })")
         for w in windows {
             w.overlayView.tearDown()
             w.orderOut(nil)

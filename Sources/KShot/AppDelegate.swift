@@ -22,6 +22,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
         }
+        // 调试：N 秒后用系统 screencapture 抓一张真实屏幕（包含本应用的遮罩窗口）
+        if let i = CommandLine.arguments.firstIndex(of: "--snap-after"), i + 2 < CommandLine.arguments.count,
+           let sec = Double(CommandLine.arguments[i + 1]) {
+            let path = CommandLine.arguments[i + 2]
+            DispatchQueue.main.asyncAfter(deadline: .now() + sec) {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                p.arguments = ["-x", path]
+                try? p.run()
+                p.waitUntilExit()
+                Log.info("snap-after wrote \(path) status=\(p.terminationStatus)")
+            }
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--icon-sheet"), i + 1 < CommandLine.arguments.count {
             MenuBarAnimator.renderSheet(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
             NSApp.terminate(nil)

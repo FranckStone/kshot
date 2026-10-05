@@ -156,6 +156,7 @@ final class OverlayView: NSView {
 
         // 5. 放大镜
         if showsLoupe, let p = mousePoint {
+            debugLoupeDraws += 1
             Loupe.draw(at: p, shot: shot, in: ctx, bounds: bounds)
         }
     }
@@ -259,6 +260,8 @@ final class OverlayView: NSView {
         let p = convert(win.mouseLocationOutsideOfEventStream, from: nil)
         guard bounds.contains(p) else { return }
         hoverRect = windowRect(atLocal: p)
+        // 一进入截图就在鼠标当前位置显示放大镜（不用先动一下鼠标）
+        mousePoint = p
         updateCursor(at: p)
         needsDisplay = true
     }
@@ -283,8 +286,13 @@ final class OverlayView: NSView {
         needsDisplay = true
     }
 
+    /// 调试计数
+    var debugMoveCount = 0
+    var debugLoupeDraws = 0
+
     override func mouseMoved(with event: NSEvent) {
         let p = location(event)
+        debugMoveCount += 1
         mousePoint = p
         if showsLoupe || selection == nil { needsDisplay = true }
         if selection == nil {
