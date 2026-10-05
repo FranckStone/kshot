@@ -3,10 +3,14 @@ import AppKit
 enum ToolbarAction {
     case tool(Tool)
     case undo
+    case redo
     case pin
     case longShot
+    case record
+    case beautify
     case ocr
     case translate
+    case redact
     case save
     case cancel
     case confirm
@@ -147,6 +151,7 @@ final class ToolbarView: NSView {
 
     private var toolButtons: [Tool: ToolButton] = [:]
     private var undoButton: ToolButton!
+    private var redoButton: ToolButton!
     private let content = ToolbarContentView()
     private var backdrop: NSView!
 
@@ -173,23 +178,33 @@ final class ToolbarView: NSView {
             if case .tool(let t) = action { toolButtons[t] = b }
         }
 
-        add(.tool(.rect), "rectangle", "矩形")
-        add(.tool(.ellipse), "circle", "椭圆")
-        add(.tool(.arrow), "arrow.up.right", "箭头")
+        add(.tool(.rect), "rectangle", "矩形（⇧ 正方形）")
+        add(.tool(.ellipse), "circle", "椭圆（⇧ 正圆）")
+        add(.tool(.line), "line.diagonal", "直线（⇧ 45°）")
+        add(.tool(.arrow), "arrow.up.right", "箭头（⇧ 45°）")
         add(.tool(.pen), "pencil.line", fallback: "scribble", "画笔")
+        add(.tool(.highlighter), "highlighter", fallback: "pencil.tip", "荧光笔（⇧ 水平）")
         add(.tool(.mosaic), "custom:mosaic", "马赛克")
-        add(.tool(.text), "text:T", "文字")
+        add(.tool(.blur), "drop.halffull", fallback: "drop", "模糊")
+        add(.tool(.text), "text:T", "文字（双击文字可再编辑）")
+        add(.tool(.step), "1.circle", "序号")
         separatorsAfter.insert(items.count - 1)
         add(.undo, "arrow.uturn.backward", "撤销  ⌘Z")
         undoButton = items.last!.button
+        add(.redo, "arrow.uturn.forward", "重做  ⇧⌘Z")
+        redoButton = items.last!.button
+        separatorsAfter.insert(items.count - 1)
         if mode == .screen {
             add(.pin, "pin", "钉在屏幕上  ⌘P")
             add(.longShot, "rectangle.expand.vertical", fallback: "arrow.up.and.down", "长截图（滚动截图）  ⌘K")
+            add(.record, "record.circle", "录屏  ⌘R")
         }
+        add(.beautify, "sparkles", "美化（背景、圆角、阴影）  ⌘B")
         add(.save, "square.and.arrow.down", "保存  ⌘S")
         separatorsAfter.insert(items.count - 1)
-        add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字  ⌘T")
+        add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字 / 二维码  ⌘T")
         add(.translate, "translate", fallback: "globe", "翻译  ⌘L")
+        add(.redact, "eye.slash", "自动打码（手机号、邮箱、证件号、银行卡、密钥）  ⌘E")
         separatorsAfter.insert(items.count - 1)
         add(.cancel, "xmark", "取消  Esc", role: .destructive)
         add(.confirm, "checkmark", "完成  ⏎", role: .prominent)
@@ -230,6 +245,19 @@ final class ToolbarView: NSView {
     func setUndoEnabled(_ enabled: Bool) {
         undoButton.isEnabled = enabled
         undoButton.alphaValue = enabled ? 1 : 0.35
+    }
+
+    /// 耗时操作进行中：按钮变暗且不可点
+    func setBusy(_ action: ToolbarAction, _ busy: Bool) {
+        for item in items where "\(item.action)" == "\(action)" {
+            item.button.isEnabled = !busy
+            item.button.alphaValue = busy ? 0.35 : 1
+        }
+    }
+
+    func setRedoEnabled(_ enabled: Bool) {
+        redoButton.isEnabled = enabled
+        redoButton.alphaValue = enabled ? 1 : 0.35
     }
 
     override func mouseDown(with event: NSEvent) {}

@@ -73,28 +73,57 @@ enum Exporter {
         }
     }
 
-    static func defaultFileName() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        return "截图 \(f.string(from: Date())).png"
+    /// 按格式编码（PNG / JPEG / HEIC）
+    static func encode(_ image: CGImage, format: ImageFormat = Settings.imageFormat) -> Data? {
+        if format == .png { return pngData(image) }
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, format.utType.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return data as Data
+    }
+
+    /// 完成截图的统一出口：复制到剪贴板、按设置自动保存、记入历史、快门声
+    @MainActor
+    static func deliver(_ image: CGImage) {
+        copyToClipboard(image)
+        Shutter.play()
+        History.add(image)
+        if Settings.autoSaveOnConfirm { quickSave(image, toast: false) }
+    }
+
+    /// 不弹面板，直接存到默认目录
+    @MainActor
+    @discardableResult
+    static func quickSave(_ image: CGImage, toast: Bool = true) -> URL? {
+        let dir = Settings.saveDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = Settings.uniqueURL(in: dir, name: Settings.fileName(width: image.width, height: image.height))
+        guard let data = encode(image) else { return nil }
+        do {
+            try data.write(to: url)
+            if toast { Toast.show("已保存到 \(url.deletingLastPathComponent().lastPathComponent)/\(url.lastPathComponent)", symbol: "square.and.arrow.down.fill") }
+            return url
+        } catch {
+            Log.info("保存失败: \(error)")
+            if toast { Toast.show("保存失败：\(error.localizedDescription)", symbol: "exclamationmark.triangle.fill") }
+            return nil
+        }
     }
 
     /// 弹出保存面板（调用方需保证遮罩已隐藏）。
     @MainActor
     static func save(_ image: CGImage, completion: @escaping (Bool) -> Void) {
+        let format = Settings.imageFormat
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = defaultFileName()
+        panel.allowedContentTypes = [format.utType]
+        panel.nameFieldStringValue = Settings.fileName(width: image.width, height: image.height)
         panel.canCreateDirectories = true
         panel.level = .modalPanel
-        if let dir = UserDefaults.standard.url(forKey: "lastSaveDirectory") {
-            panel.directoryURL = dir
-        } else {
-            panel.directoryURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-        }
+        panel.directoryURL = UserDefaults.standard.url(forKey: "lastSaveDirectory") ?? Settings.saveDirectory
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { response in
-            guard response == .OK, let url = panel.url, let data = pngData(image) else {
+            guard response == .OK, let url = panel.url, let data = encode(image, format: format) else {
                 completion(false)
                 return
             }

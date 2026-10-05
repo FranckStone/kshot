@@ -14,6 +14,44 @@ final class CaptureSession {
 
     var isActive: Bool { !windows.isEmpty || starting }
 
+    /// 本次会话要预先选中的区域（截取上次区域）
+    private var preset: Settings.Region?
+    /// 本次会话完成选区后直接开始录屏（录屏快捷键）
+    private(set) var recordIntent = false
+    private var countdown: CountdownHUD?
+
+    /// 延时截图：倒计时结束后再开始（倒计时提示框不会被截进去）
+    func begin(delay seconds: Int) {
+        guard !isActive, countdown == nil else { return }
+        let hud = CountdownHUD(seconds: seconds) { [weak self] in
+            self?.countdown = nil
+            // 等提示框真正消失后再抓屏
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self?.begin() }
+        }
+        countdown = hud
+        hud.start()
+    }
+
+    /// 截取上次区域：直接选中上次完成截图时的选区
+    func beginWithLastRegion() {
+        guard let r = Settings.lastRegion else {
+            Toast.show("还没有上次的截图区域", symbol: "exclamationmark.circle.fill")
+            return
+        }
+        preset = r
+        begin()
+    }
+
+    /// 录屏：先选区，回车 / 双击后开始录制
+    func beginRecording() {
+        if ScreenRecorder.isRecording {
+            ScreenRecorder.current?.stop(cancel: false)
+            return
+        }
+        recordIntent = true
+        begin()
+    }
+
     func begin() {
         guard !isActive else { return }
         starting = true
@@ -33,6 +71,8 @@ final class CaptureSession {
                 present(shots: shots, windows: wins)
             } catch {
                 Log.info("capture failed: \(error)")
+                preset = nil
+                recordIntent = false
                 presentError(error)
             }
         }
@@ -54,6 +94,15 @@ final class CaptureSession {
         NSCursor.crosshair.set()
         // 让鼠标所在屏幕立刻显示悬停高亮
         target?.overlayView.refreshHover()
+        if let preset, let w = windows.first(where: { $0.overlayView.screen.displayID == preset.displayID }) {
+            w.makeKeyAndOrderFront(nil)
+            w.makeFirstResponder(w.overlayView)
+            w.overlayView.preselect(preset.rect)
+        }
+        preset = nil
+        if recordIntent {
+            Toast.show("选择要录制的区域，按回车开始录屏", symbol: "record.circle")
+        }
         if CommandLine.arguments.contains("--dump") { startDebugDump() }
         if CommandLine.arguments.contains("--selftest"), let ov = target?.overlayView {
             selfTest = SelfTest.standard(on: ov)
@@ -118,6 +167,8 @@ final class CaptureSession {
         }
         windows.removeAll()
         activeOverlay = nil
+        recordIntent = false
+        preset = nil
         dumpTimer?.invalidate()
         dumpTimer = nil
         NSCursor.arrow.set()
@@ -138,5 +189,72 @@ final class CaptureSession {
 
     func canHover(_ overlay: OverlayView) -> Bool {
         activeOverlay == nil || activeOverlay === overlay
+    }
+}
+
+/// 延时截图的倒计时提示（玻璃圆角方块，屏幕中间）
+@MainActor
+final class CountdownHUD {
+    private var remaining: Int
+    private let done: () -> Void
+    private var window: NSPanel?
+    private let label = NSTextField(labelWithString: "")
+    private var timer: Timer?
+
+    init(seconds: Int, done: @escaping () -> Void) {
+        remaining = seconds
+        self.done = done
+    }
+
+    func start() {
+        let size = NSSize(width: 120, height: 120)
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        let v = screen?.frame ?? .zero
+        let w = NSPanel(contentRect: CGRect(x: v.midX - size.width / 2, y: v.midY - size.height / 2, width: size.width, height: size.height),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        w.level = .statusBar
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.ignoresMouseEvents = true
+        w.hasShadow = true
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        w.isReleasedWhenClosed = false
+        let root = NSView(frame: CGRect(origin: .zero, size: size))
+        root.wantsLayer = true
+        let content = NSView(frame: root.bounds)
+        label.font = .monospacedDigitSystemFont(ofSize: 56, weight: .bold)
+        label.alignment = .center
+        label.frame = CGRect(x: 0, y: 30, width: size.width, height: 66)
+        content.addSubview(label)
+        let hint = NSTextField(labelWithString: "秒后截图")
+        hint.font = .systemFont(ofSize: 12)
+        hint.textColor = .secondaryLabelColor
+        hint.alignment = .center
+        hint.frame = CGRect(x: 0, y: 14, width: size.width, height: 16)
+        content.addSubview(hint)
+        let backdrop = GlassBackdrop.make(cornerRadius: 28, content: content)
+        backdrop.frame = root.bounds
+        root.addSubview(backdrop)
+        w.contentView = root
+        w.orderFrontRegardless()
+        window = w
+        update()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.step() }
+        }
+    }
+
+    private func update() { label.stringValue = "\(remaining)" }
+
+    private func step() {
+        remaining -= 1
+        if remaining <= 0 {
+            timer?.invalidate()
+            window?.orderOut(nil)
+            window = nil
+            done()
+        } else {
+            update()
+        }
     }
 }

@@ -8,6 +8,8 @@ final class HotKey {
     nonisolated(unsafe) private static var handlers: [UInt32: () -> Void] = [:]
     nonisolated(unsafe) private static var nextID: UInt32 = 1
     nonisolated(unsafe) private static var handlerInstalled = false
+    /// 偏好设置里录制新快捷键时暂停响应
+    nonisolated(unsafe) static var suspended = false
 
     init?(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
         HotKey.installHandlerIfNeeded()
@@ -35,7 +37,7 @@ final class HotKey {
             var hotKeyID = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
-            if let handler = HotKey.handlers[hotKeyID.id] {
+            if !HotKey.suspended, let handler = HotKey.handlers[hotKeyID.id] {
                 DispatchQueue.main.async { handler() }
             }
             return noErr

@@ -64,6 +64,7 @@ final class ImageEditorWindow: NSWindow {
             guard let self else { return }
             if let size { self.canvas.strokeSize = size }
             if let color { self.canvas.color = color }
+            if self.canvas.marks.selected != nil { self.canvas.marks.updateSelected(color: color, size: size) }
         }
         options.size = canvas.strokeSize
         options.color = canvas.color
@@ -71,9 +72,16 @@ final class ImageEditorWindow: NSWindow {
         content.addSubview(options)
         content.addSubview(editorToolbar)
         editorToolbar.setUndoEnabled(false)
+        editorToolbar.setRedoEnabled(false)
         canvas.onAnnotationsChanged = { [weak self] in
             guard let self else { return }
             self.editorToolbar.setUndoEnabled(self.canvas.canUndo)
+            self.editorToolbar.setRedoEnabled(self.canvas.canRedo)
+            if let a = self.canvas.marks.selected {
+                self.options.size = a.size
+                if a.usesColor { self.options.color = a.color }
+            }
+            self.options.isHidden = (self.canvas.tool == .none && self.canvas.marks.selected == nil)
         }
         layoutBars()
 
@@ -110,45 +118,55 @@ final class ImageEditorWindow: NSWindow {
             options.isHidden = (canvas.tool == .none)
         case .undo:
             canvas.undo()
+        case .redo:
+            canvas.redo()
         case .save:
             guard let img = canvas.export() else { return }
-            Exporter.save(img) { _ in }
+            History.add(img)
+            if Settings.quickSave { Exporter.quickSave(img) } else { Exporter.save(img) { _ in } }
         case .confirm:
             guard let img = canvas.export() else { return }
-            Exporter.copyToClipboard(img)
+            Exporter.deliver(img)
             closeEditor()
+        case .beautify:
+            guard let img = canvas.export() else { return }
+            BeautifyWindow(image: img, scale: canvas.scale, near: frame, fromWindow: false).show()
+        case .redact:
+            runRedact()
         case .cancel:
             closeEditor()
         case .ocr:
             runOCR(translate: false)
         case .translate:
             runOCR(translate: true)
-        case .pin, .longShot:
+        case .pin, .longShot, .record:
             break
         }
     }
 
-    private func runOCR(translate: Bool) {
+    private func runRedact() {
+        canvas.commitText()
         let img = canvas.image
-        let win = OCRResultWindow(text: "正在识别…", near: frame)
-        win.makeKeyAndOrderFront(nil)
+        let size = canvas.bounds.size
+        editorToolbar.setBusy(.redact, true)
         Task { @MainActor in
-            do {
-                let lines = try await TextRecognizer.recognize(img)
-                let text = TextRecognizer.joined(lines)
-                win.setText(text)
-                if text.isEmpty {
-                    win.setStatus("未识别到文字")
-                } else {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                    win.setStatus("已识别 \(lines.count) 处文字，已复制到剪贴板")
-                    if translate { win.translateAction() }
-                }
-            } catch {
-                win.setStatus("识别失败：\(error.localizedDescription)")
+            let boxes = (try? await Redactor.findSensitive(in: img)) ?? []
+            editorToolbar.setBusy(.redact, false)
+            let rects = boxes.map {
+                CGRect(x: $0.minX * size.width, y: (1 - $0.maxY) * size.height, width: $0.width * size.width, height: $0.height * size.height)
+                    .insetBy(dx: -3, dy: -2)
+            }
+            if rects.isEmpty {
+                Toast.show("没有发现手机号、邮箱、证件号、银行卡或密钥", symbol: "eye", near: frame.center)
+            } else {
+                canvas.marks.add(rects.map { Annotation(kind: .pixelate($0), color: .black, size: .medium) })
+                Toast.show("已打码 \(rects.count) 处，可 ⌘Z 撤销", symbol: "eye.slash.fill", near: frame.center)
             }
         }
+    }
+
+    private func runOCR(translate: Bool) {
+        OCRResultWindow.present(image: canvas.image, near: frame, translate: translate)
     }
 
     func closeEditor() {
@@ -160,17 +178,28 @@ final class ImageEditorWindow: NSWindow {
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         switch event.keyCode {
-        case 53: closeEditor(); return
+        case 53:
+            if canvas.marks.selected != nil { canvas.marks.deselect(); return }
+            closeEditor(); return
         case 36, 76: handle(.confirm); return
+        case 51, 117: canvas.marks.deleteSelected(); return
+        case 123, 124, 125, 126:
+            guard canvas.marks.selected != nil else { break }
+            let step: CGFloat = flags.contains(.shift) ? 10 : 1
+            let d: [UInt16: CGPoint] = [123: CGPoint(x: -step, y: 0), 124: CGPoint(x: step, y: 0), 125: CGPoint(x: 0, y: step), 126: CGPoint(x: 0, y: -step)]
+            canvas.marks.nudgeSelected(d[event.keyCode]!)
+            return
         default: break
         }
         if flags.contains(.command) {
-            switch event.charactersIgnoringModifiers {
-            case "z": canvas.undo(); return
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "z": flags.contains(.shift) ? canvas.redo() : canvas.undo(); return
             case "s": handle(.save); return
             case "c": handle(.confirm); return
             case "t": handle(.ocr); return
             case "l": handle(.translate); return
+            case "b": handle(.beautify); return
+            case "e": handle(.redact); return
             default: break
             }
         }
@@ -188,30 +217,34 @@ final class ImageCanvasView: NSView {
     let scale: CGFloat
     private let nsImage: NSImage
     private let renderer: AnnotationRenderer
+    let marks = AnnotationLayer()
 
-    private(set) var annotations: [Annotation] = []
-    private var current: Annotation?
-    private var startPoint: CGPoint = .zero
     private var textEditor: TextEditorView?
     private var textGlass: GlassPanelView?
-    var tool: Tool = .none { didSet { if tool != .text { commitText() } } }
+    private var editingExistingText = false
+    var tool: Tool = .none { didSet { if tool != .text { commitText() }; marks.deselect(); window?.invalidateCursorRects(for: self) } }
     var color: NSColor = Palette.colors[0] { didSet { textEditor?.strokeColor = color } }
     var strokeSize: StrokeSize = .medium { didSet { textEditor?.fontSize = strokeSize.fontSize } }
     var onAnnotationsChanged: (() -> Void)?
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
-    var canUndo: Bool { !annotations.isEmpty || textEditor != nil }
+    var canUndo: Bool { marks.canUndo || textEditor != nil }
+    var canRedo: Bool { marks.canRedo }
+    var annotations: [Annotation] { marks.items }
 
     init(image: CGImage, scale: CGFloat) {
         self.image = image
         self.scale = scale
         let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         nsImage = NSImage(cgImage: image, size: size)
-        renderer = AnnotationRenderer(mosaicImage: AnnotationRenderer.makeMosaicSource(from: image, blockPixels: Int(8 * scale)),
-                                      screenBounds: CGRect(origin: .zero, size: size))
+        renderer = AnnotationRenderer(source: image, bounds: CGRect(origin: .zero, size: size), scale: scale)
         super.init(frame: CGRect(origin: .zero, size: size))
         wantsLayer = true
+        marks.onChange = { [weak self] in
+            self?.needsDisplay = true
+            self?.onAnnotationsChanged?()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -224,9 +257,7 @@ final class ImageCanvasView: NSView {
         ctx.interpolationQuality = .none
         nsImage.draw(in: r, from: r, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
         ctx.interpolationQuality = .high
-        var list = annotations
-        if let current { list.append(current) }
-        renderer.draw(list, clip: bounds, in: ctx)
+        marks.draw(with: renderer, clip: bounds, in: ctx)
     }
 
     override func resetCursorRects() {
@@ -239,41 +270,19 @@ final class ImageCanvasView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         window?.makeFirstResponder(self)
         if textEditor != nil { commitText(); return }
-        guard tool != .none, bounds.contains(p) else { return }
-        if tool == .text { beginText(at: p); return }
-        startPoint = p
-        let kind: Annotation.Kind
-        switch tool {
-        case .rect: kind = .rect(CGRect(origin: p, size: .zero))
-        case .ellipse: kind = .ellipse(CGRect(origin: p, size: .zero))
-        case .arrow: kind = .arrow(from: p, to: p)
-        case .pen: kind = .pen([p])
-        case .mosaic: kind = .mosaic([p])
-        default: return
+        switch marks.mouseDown(at: p, clip: bounds, tool: tool, color: color, size: strokeSize, clickCount: event.clickCount) {
+        case .beginText: beginText(at: p)
+        case .editText(let i): editText(at: i)
+        case .handled, .ignored: break
         }
-        current = Annotation(kind: kind, color: color, size: strokeSize)
-        needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard var a = current else { return }
-        let q = convert(event.locationInWindow, from: nil).clamped(to: bounds)
-        switch a.kind {
-        case .rect: a.kind = .rect(CGRect(p1: startPoint, p2: q))
-        case .ellipse: a.kind = .ellipse(CGRect(p1: startPoint, p2: q))
-        case .arrow(let from, _): a.kind = .arrow(from: from, to: q)
-        case .pen(var pts): pts.append(q); a.kind = .pen(pts)
-        case .mosaic(var pts): pts.append(q); a.kind = .mosaic(pts)
-        case .text: break
-        }
-        current = a
-        needsDisplay = true
+        marks.mouseDragged(to: convert(event.locationInWindow, from: nil), shift: event.modifierFlags.contains(.shift))
     }
 
     override func mouseUp(with event: NSEvent) {
-        if let a = current, !a.isDegenerate { annotations.append(a); onAnnotationsChanged?() }
-        current = nil
-        needsDisplay = true
+        marks.mouseUp()
     }
 
     // MARK: - 文字
@@ -283,7 +292,19 @@ final class ImageCanvasView: NSView {
         var origin = CGPoint(x: p.x - Annotation.textInset.width, y: p.y - fontSize * 0.7)
         origin.x = min(max(0, origin.x), bounds.width - fontSize)
         origin.y = min(max(0, origin.y), bounds.height - fontSize)
+        openTextEditor(origin: origin, string: "", color: color, fontSize: fontSize)
+    }
+
+    private func editText(at i: Int) {
+        let a = marks.extract(at: i)
+        guard case .text(let origin, let string, let fontSize) = a.kind else { return }
+        editingExistingText = true
+        openTextEditor(origin: origin, string: string, color: a.color, fontSize: fontSize)
+    }
+
+    private func openTextEditor(origin: CGPoint, string: String, color: NSColor, fontSize: CGFloat) {
         let editor = TextEditorView(origin: origin, color: color, fontSize: fontSize)
+        if !string.isEmpty { editor.string = string; editor.fit() }
         editor.onCommit = { [weak self] in self?.commitText() }
         let glass = GlassPanelView(cornerRadius: 10)
         let inset = CGSize(width: 8, height: 5)
@@ -300,8 +321,9 @@ final class ImageCanvasView: NSView {
     func commitText() {
         guard let editor = textEditor else { return }
         let a = Annotation(kind: .text(origin: editor.frame.origin, string: editor.string, fontSize: editor.fontSize),
-                           color: editor.strokeColor, size: strokeSize)
-        if !a.isDegenerate { annotations.append(a) }
+                           color: editor.strokeColor, size: StrokeSize.nearest(fontSize: editor.fontSize))
+        marks.add(a, recordUndo: !editingExistingText)
+        editingExistingText = false
         editor.removeFromSuperview()
         textGlass?.removeFromSuperview()
         textEditor = nil
@@ -313,16 +335,19 @@ final class ImageCanvasView: NSView {
 
     func undo() {
         if textEditor != nil { commitText() }
-        guard !annotations.isEmpty else { return }
-        annotations.removeLast()
-        onAnnotationsChanged?()
-        needsDisplay = true
+        marks.undo()
+    }
+
+    func redo() {
+        commitText()
+        marks.redo()
     }
 
     /// 导出：原图 + 标注，像素尺寸与原图一致
     func export() -> CGImage? {
         commitText()
-        return Exporter.render(image: image, scale: scale, annotations: annotations, renderer: renderer)
+        marks.deselect()
+        return Exporter.render(image: image, scale: scale, annotations: marks.items, renderer: renderer)
     }
 
     // 调试：合成一次点击/拖拽

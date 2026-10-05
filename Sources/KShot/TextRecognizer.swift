@@ -41,6 +41,22 @@ enum TextRecognizer {
         }
     }
 
+    /// 识别图片里的二维码 / 条形码，返回内容（去重，保持从上到下）
+    static func detectCodes(_ image: CGImage) async -> [String] {
+        await withCheckedContinuation { cont in
+            let request = VNDetectBarcodesRequest { request, _ in
+                let obs = ((request.results as? [VNBarcodeObservation]) ?? []).sorted { $0.boundingBox.midY > $1.boundingBox.midY }
+                var seen = Set<String>()
+                let payloads = obs.compactMap(\.payloadStringValue).filter { seen.insert($0).inserted }
+                cont.resume(returning: payloads)
+            }
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { try handler.perform([request]) } catch { cont.resume(returning: []) }
+            }
+        }
+    }
+
     /// 按阅读顺序排序：先按行（从上到下），同一行内从左到右
     private static func sorted(_ lines: [Line]) -> [Line] {
         let byTop = lines.sorted { $0.box.midY > $1.box.midY }

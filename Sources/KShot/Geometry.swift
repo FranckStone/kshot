@@ -69,3 +69,36 @@ extension NSColor {
     /// 主题绿
     static let accentGreen = NSColor(hex: 0x07C160)
 }
+
+/// 选区边缘的 8 个把手
+struct Handle: OptionSet, Hashable {
+    let rawValue: Int
+    static let left = Handle(rawValue: 1)
+    static let right = Handle(rawValue: 2)
+    static let top = Handle(rawValue: 4)
+    static let bottom = Handle(rawValue: 8)
+
+    static let all: [Handle] = [
+        [.left, .top], [.top], [.right, .top],
+        [.left], [.right],
+        [.left, .bottom], [.bottom], [.right, .bottom],
+    ]
+
+    func point(in r: CGRect) -> CGPoint {
+        let x: CGFloat = contains(.left) ? r.minX : (contains(.right) ? r.maxX : r.midX)
+        let y: CGFloat = contains(.top) ? r.minY : (contains(.bottom) ? r.maxY : r.midY)
+        return CGPoint(x: x, y: y)
+    }
+}
+
+extension CGRect {
+    /// 拖动某个把手到 p 后的矩形（越过对边时自动翻转）
+    func resized(handle h: Handle, to p: CGPoint) -> CGRect {
+        var minX = self.minX, maxX = self.maxX, minY = self.minY, maxY = self.maxY
+        if h.contains(.left) { minX = Swift.min(p.x, self.maxX); maxX = Swift.max(p.x, self.maxX) }
+        if h.contains(.right) { minX = Swift.min(p.x, self.minX); maxX = Swift.max(p.x, self.minX) }
+        if h.contains(.top) { minY = Swift.min(p.y, self.maxY); maxY = Swift.max(p.y, self.maxY) }
+        if h.contains(.bottom) { minY = Swift.min(p.y, self.minY); maxY = Swift.max(p.y, self.minY) }
+        return CGRect(x: minX, y: minY, width: Swift.max(1, maxX - minX), height: Swift.max(1, maxY - minY))
+    }
+}

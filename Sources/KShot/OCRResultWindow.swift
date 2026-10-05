@@ -15,6 +15,9 @@ final class OCRResultWindow: NSWindow {
     private let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let translator = Translator()
     private var content: NSView!
+    private var titleLabel: NSTextField!
+    private var openLinkButton: NSButton!
+    private var link: URL?
 
     init(text: String, near rect: CGRect) {
         let size = NSSize(width: 520, height: 360)
@@ -50,6 +53,7 @@ final class OCRResultWindow: NSWindow {
         title.textColor = .labelColor
         title.frame = CGRect(x: 20, y: size.height - 40, width: 200, height: 22)
         content.addSubview(title)
+        titleLabel = title
 
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.textColor = .secondaryLabelColor
@@ -139,6 +143,12 @@ final class OCRResultWindow: NSWindow {
         copyTranslationButton.isHidden = true
         content.addSubview(copyTranslationButton)
 
+        openLinkButton = NSButton(title: "打开链接", target: self, action: #selector(openLink))
+        openLinkButton.bezelStyle = .rounded
+        openLinkButton.frame = CGRect(x: size.width - 292, y: 14, width: 92, height: 30)
+        openLinkButton.isHidden = true
+        content.addSubview(openLinkButton)
+
         OCRResultWindow.all.append(self)
         OCRResultWindow.latest = self
     }
@@ -146,6 +156,56 @@ final class OCRResultWindow: NSWindow {
     override var canBecomeKey: Bool { true }
 
     func setStatus(_ s: String) { statusLabel.stringValue = s }
+
+    /// 识别到二维码：标题改为“二维码 / 文字”，内容是链接时提供“打开链接”
+    func setCodes(_ codes: [String]) {
+        guard !codes.isEmpty else { return }
+        titleLabel.stringValue = "二维码 / 文字"
+        if let first = codes.first(where: { $0.hasPrefix("http://") || $0.hasPrefix("https://") }), let url = URL(string: first) {
+            link = url
+            openLinkButton.isHidden = false
+            openLinkButton.toolTip = first
+        }
+    }
+
+    @objc private func openLink() {
+        guard let link else { return }
+        NSWorkspace.shared.open(link)
+        closeWindow()
+    }
+
+    /// 识别图片中的二维码与文字并弹出结果窗口（结果自动复制）
+    @MainActor
+    static func present(image: CGImage, near rect: CGRect, translate: Bool) {
+        let win = OCRResultWindow(text: "正在识别…", near: rect)
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        Task { @MainActor in
+            let codes = await TextRecognizer.detectCodes(image)
+            var lines: [TextRecognizer.Line] = []
+            var failure: Error?
+            do { lines = try await TextRecognizer.recognize(image) } catch { failure = error }
+            let ocrText = TextRecognizer.joined(lines)
+            // 二维码内容放在最前面；二维码里的文字不会被 OCR 重复识别
+            let text = (codes + (ocrText.isEmpty ? [] : [ocrText])).joined(separator: codes.isEmpty ? "" : "\n\n")
+            win.setCodes(codes)
+            if text.isEmpty {
+                win.setText("")
+                win.setStatus(failure.map { "识别失败：\($0.localizedDescription)" } ?? "未识别到文字或二维码")
+            } else {
+                win.setText(text)
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(text, forType: .string)
+                var parts: [String] = []
+                if !codes.isEmpty { parts.append("\(codes.count) 个二维码") }
+                if !lines.isEmpty { parts.append("\(lines.count) 处文字") }
+                win.setStatus("已识别 " + parts.joined(separator: "、") + "，已复制")
+                if translate { win.translateAction() }
+            }
+            Log.info("ocr: \(lines.count) lines, \(codes.count) codes")
+        }
+    }
     func setText(_ s: String) {
         textView.string = s
         languagePopup.selectItem(at: TargetLanguage.all.firstIndex(of: TargetLanguage.guess(for: s)) ?? 0)

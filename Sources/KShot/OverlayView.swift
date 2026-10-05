@@ -1,26 +1,5 @@
 import AppKit
 
-/// 选区边缘的 8 个把手
-struct Handle: OptionSet, Hashable {
-    let rawValue: Int
-    static let left = Handle(rawValue: 1)
-    static let right = Handle(rawValue: 2)
-    static let top = Handle(rawValue: 4)
-    static let bottom = Handle(rawValue: 8)
-
-    static let all: [Handle] = [
-        [.left, .top], [.top], [.right, .top],
-        [.left], [.right],
-        [.left, .bottom], [.bottom], [.right, .bottom],
-    ]
-
-    func point(in r: CGRect) -> CGPoint {
-        let x: CGFloat = contains(.left) ? r.minX : (contains(.right) ? r.maxX : r.midX)
-        let y: CGFloat = contains(.top) ? r.minY : (contains(.bottom) ? r.maxY : r.midY)
-        return CGPoint(x: x, y: y)
-    }
-}
-
 /// 单块屏幕上的截图交互层：窗口识别、拖拽选区、把手、标注、工具条。
 /// 坐标系：左上原点、y 向下（isFlipped），单位 pt。
 final class OverlayView: NSView {
@@ -30,7 +9,7 @@ final class OverlayView: NSView {
         case selecting(CGPoint)                        // 拖拽框选
         case moving(offset: CGPoint)                   // 拖动选区
         case resizing(Handle, orig: CGRect)            // 拖动把手
-        case drawing                                   // 绘制标注
+        case drawing                                   // 绘制 / 拖动编辑标注（交给 AnnotationLayer）
     }
 
     // MARK: - 数据
@@ -45,8 +24,13 @@ final class OverlayView: NSView {
     private var selection: CGRect?
     private var hoverRect: CGRect?
     private var dragMode: DragMode = .none
-    private var annotations: [Annotation] = []
-    private var current: Annotation?
+    private let marks = AnnotationLayer()
+    /// 正在重新编辑的文字标注（提交时替换原标注，不额外记录撤销）
+    private var editingExistingText = false
+    /// 单击选中的窗口（未再调整选区时，可输出带阴影的透明窗口图）
+    private var pickedWindow: WindowInfo?
+    /// 鼠标位置（放大镜用）
+    private var mousePoint: CGPoint?
     private var tool: Tool = .none
     private var color: NSColor = Palette.colors[0]
     private var strokeSize: StrokeSize = .medium
@@ -73,6 +57,8 @@ final class OverlayView: NSView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    /// 应用未激活时第一下点击也要生效（否则只用来激活窗口）
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     // MARK: - Init
 
@@ -82,11 +68,7 @@ final class OverlayView: NSView {
         self.windows = windows
         self.session = session
         self.baseImage = NSImage(cgImage: shot.image, size: frame.size)
-        let block = Int(8 * shot.scale)
-        self.renderer = AnnotationRenderer(
-            mosaicImage: AnnotationRenderer.makeMosaicSource(from: shot.image, blockPixels: block),
-            screenBounds: CGRect(origin: .zero, size: frame.size)
-        )
+        self.renderer = AnnotationRenderer(source: shot.image, bounds: CGRect(origin: .zero, size: frame.size), scale: shot.scale)
         super.init(frame: frame)
 
         toolbar.isHidden = true
@@ -107,6 +89,13 @@ final class OverlayView: NSView {
             guard let self else { return }
             if let size { self.strokeSize = size; self.textEditor?.fontSize = size.fontSize }
             if let color { self.color = color; self.textEditor?.strokeColor = color }
+            // 选中了标注：直接修改它
+            if self.marks.selected != nil { self.marks.updateSelected(color: color, size: size) }
+        }
+        marks.onChange = { [weak self] in
+            guard let self else { return }
+            self.updateToolbarState()
+            self.needsDisplay = true
         }
         options.size = strokeSize
         options.color = color
@@ -142,9 +131,7 @@ final class OverlayView: NSView {
 
         // 2. 标注（裁剪到选区内）
         if let sel = selection {
-            var list = annotations
-            if let current { list.append(current) }
-            renderer.draw(list, clip: sel, in: ctx)
+            marks.draw(with: renderer, clip: sel, in: ctx)
         }
 
         // 3. 遮罩：选区/悬停窗口以外的部分压暗；悬停到整屏时整体轻微压暗，提示处于截图状态
@@ -160,15 +147,28 @@ final class OverlayView: NSView {
         ctx.fill(bounds)
         ctx.restoreGState()
 
-        guard let cut else { return }
-
         // 4. 边框（悬停状态用玻璃框子视图，选区用细线）
-        if selection != nil {
+        if let cut, selection != nil {
             ctx.setStrokeColor(NSColor.accentGreen.cgColor)
             ctx.setLineWidth(1.5)
             ctx.stroke(cut.insetBy(dx: -0.75, dy: -0.75))
         }
 
+        // 5. 放大镜
+        if showsLoupe, let p = mousePoint {
+            Loupe.draw(at: p, shot: shot, in: ctx, bounds: bounds)
+        }
+    }
+
+    /// 选区阶段（悬停 / 框选 / 拖把手）显示放大镜
+    private var showsLoupe: Bool {
+        guard Settings.showMagnifier, textEditor == nil else { return false }
+        if let p = mousePoint, !toolbar.isHidden, toolbar.frame.contains(p) { return false }
+        switch dragMode {
+        case .selecting, .resizing, .pending: return true
+        case .none: return selection == nil && session.canHover(self)
+        default: return false
+        }
     }
 
     /// 绘制前同步尺寸标签与悬停玻璃框（子视图）。
@@ -233,7 +233,7 @@ final class OverlayView: NSView {
     }
 
     private var showsHandles: Bool {
-        guard selection != nil, tool == .none, textEditor == nil else { return false }
+        guard selection != nil, tool == .none, textEditor == nil, marks.selected == nil else { return false }
         switch dragMode {
         case .selecting, .pending, .drawing: return false
         default: return true
@@ -276,14 +276,17 @@ final class OverlayView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        mousePoint = nil
         if case .none = dragMode, selection == nil {
             hoverRect = nil
-            needsDisplay = true
         }
+        needsDisplay = true
     }
 
     override func mouseMoved(with event: NSEvent) {
         let p = location(event)
+        mousePoint = p
+        if showsLoupe || selection == nil { needsDisplay = true }
         if selection == nil {
             guard session.canHover(self) else { return }
             hoverRect = windowRect(atLocal: p)
@@ -307,30 +310,38 @@ final class OverlayView: NSView {
             return
         }
 
+        // 无工具时选区把手优先
+        if tool == .none, marks.selected == nil, let h = handle(at: p, in: sel) {
+            dragMode = .resizing(h, orig: sel)
+            pickedWindow = nil
+            layoutChrome()
+            return
+        }
+
+        // 标注：选中/拖动/缩放已有标注，或用当前工具绘制
+        switch marks.mouseDown(at: p, clip: sel, tool: tool, color: color, size: strokeSize, clickCount: event.clickCount) {
+        case .handled:
+            dragMode = .drawing
+            layoutChrome()
+            return
+        case .beginText:
+            beginTextEditing(at: p)
+            return
+        case .editText(let i):
+            editText(at: i)
+            return
+        case .ignored:
+            break
+        }
+
         // 双击选区内：完成
         if event.clickCount == 2, tool == .none, sel.contains(p) {
             confirm()
             return
         }
 
-        if tool != .none {
-            guard sel.contains(p) else { return }
-            if tool == .text {
-                beginTextEditing(at: p)
-                return
-            }
-            current = makeAnnotation(at: p.clamped(to: sel))
-            dragMode = .drawing
-            layoutChrome()
-            needsDisplay = true
-            return
-        }
+        if tool != .none { return }
 
-        if let h = handle(at: p, in: sel) {
-            dragMode = .resizing(h, orig: sel)
-            layoutChrome()
-            return
-        }
         if sel.contains(p) {
             dragMode = .moving(offset: CGPoint(x: p.x - sel.minX, y: p.y - sel.minY))
             NSCursor.closedHand.set()
@@ -338,7 +349,7 @@ final class OverlayView: NSView {
             return
         }
         // 点在选区外且尚未标注：重新框选
-        if annotations.isEmpty {
+        if marks.isEmpty {
             selection = nil
             dragMode = .pending(p)
             layoutChrome()
@@ -348,6 +359,7 @@ final class OverlayView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let p = location(event).clamped(to: bounds)
+        mousePoint = p
         switch dragMode {
         case .pending(let anchor):
             if anchor.distance(to: p) > 3 {
@@ -364,30 +376,18 @@ final class OverlayView: NSView {
             guard let sel = selection else { return }
             var r = sel
             r.origin = CGPoint(x: p.x - offset.x, y: p.y - offset.y)
+            if r.clamped(to: bounds) != sel { pickedWindow = nil }
             selection = r.clamped(to: bounds)
             needsDisplay = true
         case .resizing(let h, let orig):
-            selection = resized(orig, handle: h, to: p)
+            selection = orig.resized(handle: h, to: p)
             needsDisplay = true
         case .drawing:
-            guard var a = current, let sel = selection else { return }
-            let q = p.clamped(to: sel)
-            switch a.kind {
-            case .rect: a.kind = .rect(CGRect(p1: startPoint, p2: q))
-            case .ellipse: a.kind = .ellipse(CGRect(p1: startPoint, p2: q))
-            case .arrow(let from, _): a.kind = .arrow(from: from, to: q)
-            case .pen(var pts): pts.append(q); a.kind = .pen(pts)
-            case .mosaic(var pts): pts.append(q); a.kind = .mosaic(pts)
-            case .text: break
-            }
-            current = a
-            needsDisplay = true
+            marks.mouseDragged(to: location(event), shift: event.modifierFlags.contains(.shift))
         case .none:
             break
         }
     }
-
-    private var startPoint: CGPoint = .zero
 
     override func mouseUp(with event: NSEvent) {
         let p = location(event).clamped(to: bounds)
@@ -396,20 +396,22 @@ final class OverlayView: NSView {
             // 单击：选中鼠标下的窗口
             session.activeOverlay = self
             selection = windowRect(atLocal: p)
+            pickedWindow = WindowFinder.topWindow(at: screen.cgPoint(fromLocal: p), in: windows)
             hoverRect = nil
         case .selecting(let anchor):
             let r = CGRect(p1: anchor, p2: p)
             if r.width < 4 || r.height < 4 {
                 selection = windowRect(atLocal: p)
+                pickedWindow = WindowFinder.topWindow(at: screen.cgPoint(fromLocal: p), in: windows)
             } else {
                 selection = r.integral.intersection(bounds)
+                pickedWindow = nil
             }
             hoverRect = nil
         case .moving, .resizing:
             if let sel = selection { selection = sel.integral.intersection(bounds) }
         case .drawing:
-            if let a = current, !a.isDegenerate { annotations.append(a) }
-            current = nil
+            marks.mouseUp()
         case .none:
             break
         }
@@ -428,8 +430,8 @@ final class OverlayView: NSView {
         if selection != nil {
             // 回到悬停识别状态
             selection = nil
-            annotations.removeAll()
-            current = nil
+            pickedWindow = nil
+            marks.removeAll()
             tool = .none
             dragMode = .none
             session.activeOverlay = nil
@@ -450,28 +452,53 @@ final class OverlayView: NSView {
         let target = session.activeOverlay ?? self
 
         switch event.keyCode {
-        case 53: // Esc
+        case 53: // Esc：先取消选中的标注，再退出
+            if target.marks.selected != nil { target.marks.deselect(); target.layoutChrome(); return }
             session.cancel()
             return
         case 36, 76: // Return / Enter
             target.confirm()
             return
+        case 51, 117: // Delete：删除选中的标注
+            if target.marks.selected != nil { target.marks.deleteSelected(); target.layoutChrome() }
+            return
         default:
             break
         }
         if flags.contains(.command) {
-            switch chars {
-            case "z": target.undo(); return
+            switch chars.lowercased() {
+            case "z": flags.contains(.shift) ? target.redo() : target.undo(); return
             case "s": target.save(); return
             case "c": target.confirm(); return
             case "p": target.pin(); return
             case "k": target.longShot(); return
             case "t": target.recognizeText(); return
             case "l": target.recognizeText(thenTranslate: true); return
+            case "r": target.record(); return
+            case "b": target.beautify(); return
+            case "e": target.redact(); return
             default: break
             }
+            return
         }
-        // 方向键微调选区
+        // C / ⇧C：复制放大镜下的颜色（HEX / RGB）
+        if chars.lowercased() == "c", target.showsLoupe, let p = target.mousePoint {
+            target.copyColor(at: p, rgb: flags.contains(.shift))
+            return
+        }
+        // 方向键：移动选中的标注，或微调选区
+        if target.marks.selected != nil, [123, 124, 125, 126].contains(Int(event.keyCode)) {
+            let step: CGFloat = flags.contains(.shift) ? 10 : 1
+            let d: CGPoint
+            switch event.keyCode {
+            case 123: d = CGPoint(x: -step, y: 0)
+            case 124: d = CGPoint(x: step, y: 0)
+            case 125: d = CGPoint(x: 0, y: step)
+            default: d = CGPoint(x: 0, y: -step)
+            }
+            target.marks.nudgeSelected(d)
+            return
+        }
         if target.selection != nil, [123, 124, 125, 126].contains(Int(event.keyCode)) {
             let step: CGFloat = flags.contains(.shift) ? 10 : 1
             var d = CGPoint.zero
@@ -488,9 +515,10 @@ final class OverlayView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // 让 ⌘Z/⌘S/⌘C/⌘P 不触发系统提示音
+        // 让 ⌘Z/⌘S/⌘C/⌘P 等不触发系统提示音
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command, let c = event.charactersIgnoringModifiers, ["z", "s", "c", "p", "t", "l", "k"].contains(c) {
+        if flags == .command || flags == [.command, .shift], let c = event.charactersIgnoringModifiers?.lowercased(),
+           ["z", "s", "c", "p", "t", "l", "k", "r", "b", "e"].contains(c) {
             keyDown(with: event)
             return true
         }
@@ -502,6 +530,7 @@ final class OverlayView: NSView {
         r.origin.x += d.x
         r.origin.y += d.y
         selection = r.clamped(to: bounds)
+        pickedWindow = nil
         layoutChrome()
         needsDisplay = true
     }
@@ -513,15 +542,6 @@ final class OverlayView: NSView {
             return h
         }
         return nil
-    }
-
-    private func resized(_ orig: CGRect, handle h: Handle, to p: CGPoint) -> CGRect {
-        var minX = orig.minX, maxX = orig.maxX, minY = orig.minY, maxY = orig.maxY
-        if h.contains(.left) { minX = min(p.x, orig.maxX); maxX = max(p.x, orig.maxX) }
-        if h.contains(.right) { minX = min(p.x, orig.minX); maxX = max(p.x, orig.minX) }
-        if h.contains(.top) { minY = min(p.y, orig.maxY); maxY = max(p.y, orig.maxY) }
-        if h.contains(.bottom) { minY = min(p.y, orig.minY); maxY = max(p.y, orig.minY) }
-        return CGRect(x: minX, y: minY, width: max(1, maxX - minX), height: max(1, maxY - minY))
     }
 
     private func updateCursor(at p: CGPoint) {
@@ -542,6 +562,11 @@ final class OverlayView: NSView {
             return
         default:
             break
+        }
+        if case .drawing = dragMode { return }
+        if selection != nil, let c = marks.cursor(at: p, tool: tool) {
+            c.set()
+            return
         }
         if let sel = selection, tool == .none {
             if let h = handle(at: p, in: sel) {
@@ -578,27 +603,30 @@ final class OverlayView: NSView {
 
     // MARK: - 标注
 
-    private func makeAnnotation(at p: CGPoint) -> Annotation {
-        startPoint = p
-        let kind: Annotation.Kind
-        switch tool {
-        case .rect: kind = .rect(CGRect(origin: p, size: .zero))
-        case .ellipse: kind = .ellipse(CGRect(origin: p, size: .zero))
-        case .arrow: kind = .arrow(from: p, to: p)
-        case .pen: kind = .pen([p])
-        case .mosaic: kind = .mosaic([p])
-        case .text, .none: kind = .pen([p])
-        }
-        return Annotation(kind: kind, color: color, size: strokeSize)
-    }
-
     private func beginTextEditing(at p: CGPoint) {
         guard let sel = selection else { return }
         let fontSize = strokeSize.fontSize
         var origin = CGPoint(x: p.x - Annotation.textInset.width, y: p.y - fontSize * 0.7)
         origin.x = min(max(sel.minX, origin.x), sel.maxX - fontSize)
         origin.y = min(max(sel.minY, origin.y), sel.maxY - fontSize)
+        openTextEditor(origin: origin, string: "", color: color, fontSize: fontSize)
+    }
+
+    /// 双击已有文字标注：取出来重新编辑
+    private func editText(at i: Int) {
+        let a = marks.extract(at: i)
+        guard case .text(let origin, let string, let fontSize) = a.kind else { return }
+        editingExistingText = true
+        strokeSize = StrokeSize.nearest(fontSize: fontSize)
+        color = a.color
+        options.size = strokeSize
+        options.color = color
+        openTextEditor(origin: origin, string: string, color: a.color, fontSize: fontSize)
+    }
+
+    private func openTextEditor(origin: CGPoint, string: String, color: NSColor, fontSize: CGFloat) {
         let editor = TextEditorView(origin: origin, color: color, fontSize: fontSize)
+        if !string.isEmpty { editor.string = string; editor.fit() }
         editor.onCommit = { [weak self] in self?.commitText() }
         let glass = GlassPanelView(cornerRadius: 10)
         glass.frame = editor.frame.insetBy(dx: -OverlayView.textGlassInset.width, dy: -OverlayView.textGlassInset.height)
@@ -617,7 +645,8 @@ final class OverlayView: NSView {
         guard let editor = textEditor else { return }
         let a = Annotation(kind: .text(origin: editor.frame.origin, string: editor.string, fontSize: editor.fontSize),
                            color: editor.strokeColor, size: strokeSize)
-        if !a.isDegenerate { annotations.append(a) }
+        marks.add(a, recordUndo: !editingExistingText)
+        editingExistingText = false
         editor.removeFromSuperview()
         textGlass?.removeFromSuperview()
         textEditor = nil
@@ -631,10 +660,14 @@ final class OverlayView: NSView {
         if textEditor != nil {
             commitText()
         }
-        guard !annotations.isEmpty else { return }
-        annotations.removeLast()
-        updateToolbarState()
-        needsDisplay = true
+        marks.undo()
+        layoutChrome()
+    }
+
+    private func redo() {
+        commitText()
+        marks.redo()
+        layoutChrome()
     }
 
     // MARK: - 工具条
@@ -644,14 +677,19 @@ final class OverlayView: NSView {
         case .tool(let t):
             commitText()
             tool = (tool == t) ? .none : t
+            marks.deselect()
             updateToolbarState()
             layoutChrome()
             needsDisplay = true
         case .undo: undo()
+        case .redo: redo()
         case .pin: pin()
         case .longShot: longShot()
+        case .record: record()
+        case .beautify: beautify()
         case .ocr: recognizeText()
         case .translate: recognizeText(thenTranslate: true)
+        case .redact: redact()
         case .save: save()
         case .cancel: session.cancel()
         case .confirm: confirm()
@@ -660,7 +698,17 @@ final class OverlayView: NSView {
 
     private func updateToolbarState() {
         toolbar.setSelectedTool(tool)
-        toolbar.setUndoEnabled(!annotations.isEmpty || textEditor != nil)
+        toolbar.setUndoEnabled(marks.canUndo || textEditor != nil)
+        toolbar.setRedoEnabled(marks.canRedo)
+        // 选中标注时，选项面板显示它的颜色与粗细
+        if let a = marks.selected {
+            options.size = a.size
+            if a.usesColor { options.color = a.color }
+        }
+        if !marks.isDragging, case .none = dragMode, selection != nil {
+            let wantOptions = tool != .none || marks.selected != nil
+            if options.isHidden == wantOptions { layoutChrome() }
+        }
     }
 
     private func layoutChrome() {
@@ -670,7 +718,7 @@ final class OverlayView: NSView {
             return
         }
         toolbar.isHidden = false
-        options.isHidden = (tool == .none)
+        options.isHidden = (tool == .none && marks.selected == nil)
 
         let gap: CGFloat = 8
         let optionsExtra: CGFloat = options.isHidden ? 0 : OptionsView.height + 6
@@ -706,20 +754,112 @@ final class OverlayView: NSView {
     private func renderImage() -> CGImage? {
         commitText()
         guard let sel = selection else { return nil }
-        return Exporter.render(shot: shot, selection: sel, annotations: annotations, renderer: renderer)
+        marks.deselect()
+        Settings.lastRegion = Settings.Region(displayID: screen.displayID, rect: sel)
+        return Exporter.render(shot: shot, selection: sel, annotations: marks.items, renderer: renderer)
     }
 
     private func confirm() {
+        // 通过录屏快捷键进来的：回车 / 双击开始录制
+        if session.recordIntent { record(); return }
         guard let img = renderImage() else { return }
-        Exporter.copyToClipboard(img)
+        // 单击选中的窗口且开启了“窗口阴影”：重新抓取该窗口（带系统阴影、透明背景）再叠加标注
+        if Settings.windowShadow, let w = pickedWindow, !CommandLine.arguments.contains("--demo") {
+            let items = marks.items
+            let windowLocal = screen.localRect(fromCG: w.bounds)
+            let renderer = renderer
+            session.end()
+            Task { @MainActor in
+                let out = await WindowShadow.capture(window: w, windowLocalRect: windowLocal, annotations: items, renderer: renderer) ?? img
+                Exporter.deliver(out)
+            }
+            return
+        }
         session.end()
+        Exporter.deliver(img)
     }
 
     private func save() {
         guard let img = renderImage() else { return }
+        Shutter.play()
+        History.add(img)
+        if Settings.quickSave {
+            session.end()
+            Exporter.quickSave(img)
+            return
+        }
         session.hideOverlays()
         Exporter.save(img) { [session] _ in
             session.end()
+        }
+    }
+
+    /// 复制放大镜下的颜色并结束截图
+    private func copyColor(at p: CGPoint, rgb: Bool) {
+        guard let c = Loupe.color(at: p, shot: shot) else { return }
+        let text = rgb ? "rgb(\(c.rgbText))" : c.hex
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        session.end()
+        Toast.show("已复制颜色 \(text)", symbol: "eyedropper")
+    }
+
+    /// 由“截取上次区域”调用：直接选中给定区域
+    func preselect(_ r: CGRect) {
+        let rect = r.intersection(bounds)
+        guard rect.width >= 4, rect.height >= 4 else { return }
+        session.activeOverlay = self
+        selection = rect
+        hoverRect = nil
+        dragMode = .none
+        updateToolbarState()
+        layoutChrome()
+        needsDisplay = true
+    }
+
+    /// 美化：带背景、内边距、圆角、阴影导出
+    private func beautify() {
+        guard let img = renderImage() else { return }
+        let frame = screen.cocoaRect(fromLocal: selection ?? .zero)
+        let fromWindow = pickedWindow != nil
+        session.end(restoreFocus: false)
+        BeautifyWindow(image: img, scale: shot.scale, near: frame, fromWindow: fromWindow).show()
+    }
+
+    /// 录屏：把选区交给录屏会话
+    private func record() {
+        commitText()
+        guard let sel = selection?.integral else { return }
+        let scr = screen
+        Settings.lastRegion = Settings.Region(displayID: screen.displayID, rect: sel)
+        session.end(restoreFocus: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            ScreenRecorder.start(screen: scr, region: sel)
+        }
+    }
+
+    /// 自动打码：识别选区内的敏感信息，盖上马赛克（可撤销）
+    private func redact() {
+        commitText()
+        guard let sel = selection,
+              let img = Exporter.render(shot: shot, selection: sel, annotations: [], renderer: renderer) else { return }
+        toolbar.setBusy(.redact, true)
+        Task { @MainActor in
+            let boxes = (try? await Redactor.findSensitive(in: img)) ?? []
+            toolbar.setBusy(.redact, false)
+            guard selection == sel else { return }
+            let rects = boxes.map { b in
+                // 归一化（左下原点）→ 选区内局部坐标，四周留一点余量
+                CGRect(x: sel.minX + b.minX * sel.width, y: sel.minY + (1 - b.maxY) * sel.height,
+                       width: b.width * sel.width, height: b.height * sel.height).insetBy(dx: -3, dy: -2)
+            }
+            if rects.isEmpty {
+                Toast.show("没有发现手机号、邮箱、证件号、银行卡或密钥", symbol: "eye", near: screen.cocoaRect(fromLocal: sel).center)
+            } else {
+                marks.add(rects.map { Annotation(kind: .pixelate($0), color: .black, size: .medium) })
+                Toast.show("已打码 \(rects.count) 处，可 ⌘Z 撤销", symbol: "eye.slash.fill", near: screen.cocoaRect(fromLocal: sel).center)
+            }
         }
     }
 
@@ -730,31 +870,7 @@ final class OverlayView: NSView {
               let img = Exporter.render(shot: shot, selection: sel, annotations: [], renderer: renderer) else { return }
         let frame = screen.cocoaRect(fromLocal: sel)
         session.end(restoreFocus: false)
-        let win = OCRResultWindow(text: "正在识别…", near: frame)
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        Task { @MainActor in
-            do {
-                let lines = try await TextRecognizer.recognize(img)
-                let text = TextRecognizer.joined(lines)
-                if text.isEmpty {
-                    win.setText("")
-                    win.setStatus("未识别到文字")
-                } else {
-                    win.setText(text)
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(text, forType: .string)
-                    win.setStatus("已识别 \(lines.count) 处文字，已复制到剪贴板")
-                    if thenTranslate { win.translateAction() }
-                }
-                Log.info("ocr: \(lines.count) lines")
-            } catch {
-                win.setText("")
-                win.setStatus("识别失败：\(error.localizedDescription)")
-                Log.info("ocr failed: \(error)")
-            }
-        }
+        OCRResultWindow.present(image: img, near: frame, translate: thenTranslate)
     }
 
     /// 长截图：隐藏遮罩后对选区自动滚动并拼接
@@ -772,6 +888,7 @@ final class OverlayView: NSView {
     private func pin() {
         guard let sel = selection, let img = renderImage() else { return }
         let frame = screen.cocoaRect(fromLocal: sel)
+        History.add(img)
         session.end(restoreFocus: false)
         let pinWindow = PinWindow(image: img, frame: frame)
         pinWindow.makeKeyAndOrderFront(nil)
@@ -827,7 +944,7 @@ extension OverlayView {
 
     func debugExport(to url: URL) {
         guard let sel = selection,
-              let img = Exporter.render(shot: shot, selection: sel, annotations: annotations, renderer: renderer),
+              let img = Exporter.render(shot: shot, selection: sel, annotations: marks.items, renderer: renderer),
               let data = Exporter.pngData(img) else { return }
         try? data.write(to: url)
     }
@@ -836,11 +953,23 @@ extension OverlayView {
     var debugHover: String { "hover=\(String(describing: hoverRect)) frameHidden=\(hoverFrame.isHidden) frame=\(hoverFrame.frame)" }
     var debugToolbarFrame: CGRect { toolbar.frame }
     var debugOptionsFrame: CGRect? { options.isHidden ? nil : options.frame }
-    var debugAnnotationCount: Int { annotations.count }
+    var debugAnnotationCount: Int { marks.items.count }
 
     func debugSnapshot(to url: URL) {
-        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return }
-        cacheDisplay(in: bounds, to: rep)
+        // 手动合成：先画自己，再把每个可见子视图各自缓存后贴上去（显示器休眠时 cacheDisplay 整体渲染不可靠）
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds), let gc = NSGraphicsContext(bitmapImageRep: rep) else { return }
+        let ctx = gc.cgContext
+        ctx.translateBy(x: 0, y: bounds.height)
+        ctx.scaleBy(x: 1, y: -1)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        draw(bounds)
+        for v in subviews where !v.isHidden && v.alphaValue > 0 {
+            guard let sub = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
+            v.cacheDisplay(in: v.bounds, to: sub)
+            sub.draw(in: v.frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        NSGraphicsContext.restoreGraphicsState()
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 }
@@ -882,9 +1011,13 @@ final class SelfTest {
             // 用 ScreenCaptureKit 抓一张真实合成后的屏幕（包含玻璃效果），便于核对外观
             let url = dir.appendingPathComponent("screen.png")
             Task { @MainActor in
-                if let shot = try? await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
-                    try? data.write(to: url)
-                    Log.info("screen captured to \(url.path)")
+                do {
+                    if let shot = try await ScreenCapturer.captureAll().first, let data = Exporter.pngData(shot.image) {
+                        try? data.write(to: url)
+                        Log.info("screen captured to \(url.path)")
+                    }
+                } catch {
+                    Log.info("pause capture failed: \(error)")
                 }
             }
             return
@@ -957,6 +1090,38 @@ final class SelfTest {
             guard let s = o.debugSelection else { return }
             o.debugDrag([CGPoint(x: s.minX + 40, y: s.minY + 160), CGPoint(x: s.minX + 200, y: s.minY + 170), CGPoint(x: s.minX + 360, y: s.minY + 180)])
         }
+        t.add("tool-line") { o.debugAction(.tool(.line)); o.debugOptions(size: .medium, color: Palette.colors[5]) }
+        t.add("draw-line") {
+            guard let s = o.debugSelection else { return }
+            o.debugDrag([CGPoint(x: s.maxX - 200, y: s.minY + 30), CGPoint(x: s.maxX - 120, y: s.minY + 60), CGPoint(x: s.maxX - 40, y: s.minY + 90)])
+        }
+        t.add("tool-highlighter") { o.debugAction(.tool(.highlighter)); o.debugOptions(size: .medium, color: Palette.colors[2]) }
+        t.add("draw-highlighter") {
+            guard let s = o.debugSelection else { return }
+            o.debugDrag([CGPoint(x: s.minX + 230, y: s.minY + 230), CGPoint(x: s.minX + 330, y: s.minY + 232), CGPoint(x: s.minX + 430, y: s.minY + 231)])
+        }
+        t.add("tool-blur") { o.debugAction(.tool(.blur)) }
+        t.add("draw-blur") {
+            guard let s = o.debugSelection else { return }
+            o.debugDrag([CGPoint(x: s.maxX - 260, y: s.maxY - 140), CGPoint(x: s.maxX - 160, y: s.maxY - 90), CGPoint(x: s.maxX - 60, y: s.maxY - 40)])
+        }
+        t.add("tool-step") { o.debugAction(.tool(.step)); o.debugOptions(size: .medium, color: Palette.colors[0]) }
+        t.add("draw-steps") {
+            guard let s = o.debugSelection else { return }
+            for i in 0..<3 { o.debugClick(at: CGPoint(x: s.maxX - 300 + CGFloat(i) * 50, y: s.minY + 150)) }
+        }
+        t.add("select-rect") {
+            o.debugAction(.tool(.step)) // 关掉工具
+            guard let s = o.debugSelection else { return }
+            o.debugClick(at: CGPoint(x: s.minX + 20, y: s.minY + 60)) // 矩形左边框
+        }
+        t.add("move-rect") {
+            guard let s = o.debugSelection else { return }
+            o.debugDrag([CGPoint(x: s.minX + 20, y: s.minY + 60), CGPoint(x: s.minX + 40, y: s.minY + 80), CGPoint(x: s.minX + 60, y: s.minY + 100)])
+        }
+        t.add("recolor-rect") { o.debugOptions(size: .large, color: Palette.colors[4]) }
+        t.add("undo-recolor") { o.debugAction(.undo) }
+        t.add("redo-recolor") { o.debugAction(.redo) }
         t.add("tool-text") { o.debugAction(.tool(.text)); o.debugOptions(size: .large, color: Palette.colors[0]) }
         t.add("text-begin") {
             guard let s = o.debugSelection else { return }
@@ -964,7 +1129,14 @@ final class SelfTest {
             o.debugTypeText("KShot 截图标注")
         }
         t.add("text-commit") { o.debugCommitText() }
+        t.add("text-reedit") {
+            guard let s = o.debugSelection else { return }
+            o.debugClick(at: CGPoint(x: s.minX + 70, y: s.maxY - 215), clicks: 2)
+            o.debugTypeText("（已修改）")
+        }
+        t.add("text-recommit") { o.debugCommitText() }
         t.add("undo") { o.debugAction(.undo) }
+        t.add("redo") { o.debugAction(.redo) }
         t.add("tool-off") { o.debugAction(.tool(.mosaic)); o.debugAction(.tool(.mosaic)) }
         t.add("export-annotated") {
             o.debugExport(to: t.dir.appendingPathComponent("export-annotated.png"))

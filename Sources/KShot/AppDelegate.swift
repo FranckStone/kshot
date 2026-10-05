@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         registerHotKey()
+        NotificationCenter.default.addObserver(forName: Settings.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.registerHotKey() }
+        }
         Log.info("启动 \(Bundle.main.bundlePath)，录屏权限=\(CGPreflightScreenCaptureAccess())")
         setupLaunchAtLoginDefault()
         TextRecognizer.warmUp()
@@ -23,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        if FeatureTests.runIfRequested() { return }
         if CommandLine.arguments.contains("--stitch-test") {
             StitchTest.run()
             NSApp.terminate(nil)
@@ -62,47 +66,131 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 菜单栏
 
+    private var captureItem: NSMenuItem!
+    private var repeatItem: NSMenuItem!
+    private var recordItem: NSMenuItem!
+    private var pinsItem: NSMenuItem!
+    private let historyMenu = HistoryMenu()
+
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
             button.image = MenuBarIcon.make()
-            button.toolTip = "KShot 截图  ⌃⌘A"
+            button.toolTip = "KShot 截图  \(Settings.captureHotKey.display)"
         }
 
         let menu = NSMenu()
-        let shot = NSMenuItem(title: "截图", action: #selector(takeScreenshot), keyEquivalent: "a")
-        shot.keyEquivalentModifierMask = [.control, .command]
-        shot.target = self
-        menu.addItem(shot)
+        @discardableResult func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+            let mi = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            mi.target = self
+            menu.addItem(mi)
+            return mi
+        }
+        captureItem = item("截图", #selector(takeScreenshot))
+        repeatItem = item("截取上次区域", #selector(captureLastRegion))
+        let delay = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
+        let delayMenu = NSMenu()
+        for sec in [3, 5, 10] {
+            let mi = NSMenuItem(title: "\(sec) 秒后", action: #selector(delayedScreenshot(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.tag = sec
+            delayMenu.addItem(mi)
+        }
+        delay.submenu = delayMenu
+        menu.addItem(delay)
+        recordItem = item("录屏", #selector(toggleRecording))
         menu.addItem(.separator())
 
-        let perm = NSMenuItem(title: "屏幕录制权限…", action: #selector(openPrivacySettings), keyEquivalent: "")
-        perm.target = self
-        menu.addItem(perm)
+        let history = NSMenuItem(title: "最近截图", action: nil, keyEquivalent: "")
+        history.submenu = historyMenu.menu
+        menu.addItem(history)
+        pinsItem = NSMenuItem(title: "钉图", action: nil, keyEquivalent: "")
+        pinsItem.submenu = NSMenu()
+        menu.addItem(pinsItem)
+        menu.addItem(.separator())
 
-        launchAtLoginItem = NSMenuItem(title: "开机自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        launchAtLoginItem.target = self
-        menu.addItem(launchAtLoginItem)
+        item("偏好设置…", #selector(openPreferences), key: ",")
+        item("屏幕录制权限…", #selector(openPrivacySettings))
+        launchAtLoginItem = item("开机自动启动", #selector(toggleLaunchAtLogin))
         menu.addItem(.separator())
         menu.delegate = self
-
-        let quit = NSMenuItem(title: "退出 KShot", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
+        item("退出 KShot", #selector(quit), key: "q")
         statusItem.menu = menu
+        refreshHotKeyTitles()
     }
 
-    // MARK: - 全局快捷键 ⌃⌘A
+    /// 菜单项上显示当前快捷键
+    private func refreshHotKeyTitles() {
+        func apply(_ mi: NSMenuItem, _ c: HotKeyCombo) {
+            let name = HotKeyCombo.keyName(c.keyCode)
+            if name.count == 1 {
+                mi.keyEquivalent = name.lowercased()
+                var m: NSEvent.ModifierFlags = []
+                if c.modifiers & UInt32(controlKey) != 0 { m.insert(.control) }
+                if c.modifiers & UInt32(optionKey) != 0 { m.insert(.option) }
+                if c.modifiers & UInt32(shiftKey) != 0 { m.insert(.shift) }
+                if c.modifiers & UInt32(cmdKey) != 0 { m.insert(.command) }
+                mi.keyEquivalentModifierMask = m
+            } else {
+                mi.keyEquivalent = ""
+            }
+        }
+        apply(captureItem, Settings.captureHotKey)
+        apply(repeatItem, Settings.repeatHotKey)
+        apply(recordItem, Settings.recordHotKey)
+        statusItem.button?.toolTip = "KShot 截图  \(Settings.captureHotKey.display)"
+    }
+
+    private func refreshPinsMenu() {
+        let menu = pinsItem.submenu!
+        menu.removeAllItems()
+        let count = PinWindow.count
+        pinsItem.title = count == 0 ? "钉图" : "钉图（\(count)）"
+        func add(_ t: String, _ sel: Selector, enabled: Bool) {
+            let mi = NSMenuItem(title: t, action: sel, keyEquivalent: "")
+            mi.target = self
+            mi.isEnabled = enabled
+            menu.addItem(mi)
+        }
+        menu.autoenablesItems = false
+        add(PinWindow.allHidden ? "显示所有钉图" : "隐藏所有钉图", #selector(togglePins), enabled: count > 0)
+        add("恢复所有钉图可点击", #selector(restorePinClicks), enabled: PinWindow.hasClickThrough)
+        add("关闭所有钉图", #selector(closePins), enabled: count > 0)
+    }
+
+    @objc private func togglePins() { PinWindow.setAllHidden(!PinWindow.allHidden) }
+    @objc private func restorePinClicks() { PinWindow.restoreAllClicks() }
+    @objc private func closePins() { PinWindow.closeAll() }
+
+    // MARK: - 全局快捷键
+
+    private var repeatHotKey: HotKey?
+    private var recordHotKey: HotKey?
+    private var registered: [HotKeyCombo] = []
 
     private func registerHotKey() {
-        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(controlKey | cmdKey)) { [weak self] in
-            self?.takeScreenshot()
+        let combos = [Settings.captureHotKey, Settings.repeatHotKey, Settings.recordHotKey]
+        guard combos != registered else { return }
+        registered = combos
+        hotKey = nil
+        repeatHotKey = nil
+        recordHotKey = nil
+        hotKey = HotKey(keyCode: combos[0].keyCode, modifiers: combos[0].modifiers) { [weak self] in self?.takeScreenshot() }
+        repeatHotKey = HotKey(keyCode: combos[1].keyCode, modifiers: combos[1].modifiers) { [weak self] in self?.captureLastRegion() }
+        recordHotKey = HotKey(keyCode: combos[2].keyCode, modifiers: combos[2].modifiers) { [weak self] in self?.toggleRecording() }
+        for (name, ok, c) in [("截图", hotKey != nil, combos[0]), ("截取上次区域", repeatHotKey != nil, combos[1]), ("录屏", recordHotKey != nil, combos[2])] {
+            Log.info(ok ? "快捷键 \(c.display)（\(name)）注册成功" : "注册快捷键 \(c.display)（\(name)）失败，可能被其他应用占用")
         }
-        if hotKey == nil {
-            Log.info("注册快捷键 ⌃⌘A 失败，可能被其他应用占用")
-        } else {
-            Log.info("快捷键 ⌃⌘A 注册成功")
-        }
+        if statusItem != nil { refreshHotKeyTitles() }
+    }
+
+    /// 偏好设置里的快捷键是否注册成功
+    func hotKeyFailures() -> [String] {
+        var out: [String] = []
+        if hotKey == nil { out.append("截图") }
+        if repeatHotKey == nil { out.append("截取上次区域") }
+        if recordHotKey == nil { out.append("录屏") }
+        return out
     }
 
     // MARK: - 开机自动启动
@@ -153,6 +241,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CaptureSession.shared.begin()
     }
 
+    @objc func captureLastRegion() {
+        CaptureSession.shared.beginWithLastRegion()
+    }
+
+    @objc private func delayedScreenshot(_ sender: NSMenuItem) {
+        CaptureSession.shared.begin(delay: sender.tag)
+    }
+
+    @objc func toggleRecording() {
+        CaptureSession.shared.beginRecording()
+    }
+
+    @objc private func openPreferences() {
+        PreferencesWindow.show()
+    }
+
     @objc private func openPrivacySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
@@ -167,5 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         refreshLaunchAtLoginItem()
+        refreshPinsMenu()
+        recordItem.title = ScreenRecorder.isRecording ? "停止录屏" : "录屏"
     }
 }
