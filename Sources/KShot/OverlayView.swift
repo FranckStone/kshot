@@ -519,22 +519,25 @@ final class OverlayView: NSView {
         default:
             break
         }
-        if flags.contains(.command) {
-            switch chars.lowercased() {
-            case "z": flags.contains(.shift) ? target.redo() : target.undo(); return
-            case "s": target.save(); return
-            case "c": target.confirm(); return
-            case "p": target.pin(); return
-            case "k": target.longShot(); return
-            case "t": target.recognizeText(); return
-            case "l": target.recognizeText(thenTranslate: true); return
-            case "r": target.record(); return
-            case "b": target.beautify(); return
-            case "e": target.redact(); return
+        // 偏好设置里可自定义的快捷键
+        if let a = ShortcutAction.local(matching: event) {
+            switch a {
+            case .undo: target.undo()
+            case .redo: target.redo()
+            case .save: target.save()
+            case .confirm: target.confirm()
+            case .pin: target.pin()
+            case .longShot: target.longShot()
+            case .ocr: target.recognizeText()
+            case .translate: target.recognizeText(thenTranslate: true)
+            case .recordRegion: target.record()
+            case .beautify: target.beautify()
+            case .redact: target.redact()
             default: break
             }
             return
         }
+        if flags.contains(.command) { return }
         // C / ⇧C：复制放大镜下的颜色（HEX / RGB）
         if chars.lowercased() == "c", target.showsLoupe, let p = target.mousePoint {
             target.copyColor(at: p, rgb: flags.contains(.shift), endSession: !target.loupeOn)
@@ -569,10 +572,8 @@ final class OverlayView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // 让 ⌘Z/⌘S/⌘C/⌘P 等不触发系统提示音
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command || flags == [.command, .shift], let c = event.charactersIgnoringModifiers?.lowercased(),
-           ["z", "s", "c", "p", "t", "l", "k", "r", "b", "e"].contains(c) {
+        // 让 ⌘Z/⌘S/⌘C/⌘P 等快捷键不触发系统提示音
+        if ShortcutAction.local(matching: event) != nil {
             keyDown(with: event)
             return true
         }

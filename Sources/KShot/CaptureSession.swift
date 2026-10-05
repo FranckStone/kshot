@@ -138,13 +138,12 @@ final class CaptureSession {
         alert.messageText = "截图失败"
         alert.informativeText = error.localizedDescription
         if case CaptureError.permissionDenied = error {
-            alert.informativeText += "\n\n请在“系统设置 › 隐私与安全性 › 屏幕录制”中勾选 KShot，然后重试。"
-            alert.addButton(withTitle: "打开系统设置")
+            alert.informativeText += "\n\n请在“系统设置 › 隐私与安全性 › 录屏与系统录音”中打开 KShot，然后重新启动 KShot。"
+            alert.addButton(withTitle: "查看权限设置")
             alert.addButton(withTitle: "取消")
             NSApp.activate(ignoringOtherApps: true)
-            if alert.runModal() == .alertFirstButtonReturn,
-               let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
+            if alert.runModal() == .alertFirstButtonReturn {
+                PreferencesWindow.show(tab: .permissions)
             }
         } else {
             alert.addButton(withTitle: "好")

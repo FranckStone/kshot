@@ -191,17 +191,16 @@ final class ImageEditorWindow: NSWindow {
             return
         default: break
         }
-        if flags.contains(.command) {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "z": flags.contains(.shift) ? canvas.redo() : canvas.undo(); return
-            case "s": handle(.save); return
-            case "c": handle(.confirm); return
-            case "t": handle(.ocr); return
-            case "l": handle(.translate); return
-            case "b": handle(.beautify); return
-            case "e": handle(.redact); return
-            default: break
-            }
+        switch ShortcutAction.local(matching: event) {
+        case .undo: canvas.undo(); return
+        case .redo: canvas.redo(); return
+        case .save: handle(.save); return
+        case .confirm: handle(.confirm); return
+        case .ocr: handle(.ocr); return
+        case .translate: handle(.translate); return
+        case .beautify: handle(.beautify); return
+        case .redact: handle(.redact); return
+        default: break
         }
         super.keyDown(with: event)
     }

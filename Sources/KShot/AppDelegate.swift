@@ -6,7 +6,6 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var iconAnimator: MenuBarAnimator?
-    private var hotKey: HotKey?
     private var launchAtLoginItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -96,7 +95,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             iconAnimator = MenuBarAnimator(button: button)
             if CommandLine.arguments.contains("--icon-demo") { iconAnimator?.runDemo() }
-            button.toolTip = "KShot 截图  \(Settings.captureHotKey.display)"
         }
 
         let menu = NSMenu()
@@ -115,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mi.target = self
             mi.tag = sec
             delayMenu.addItem(mi)
+            if sec == ShortcutAction.delaySeconds { delayItem = mi }
         }
         delay.submenu = delayMenu
         menu.addItem(delay)
@@ -130,7 +129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         item("偏好设置…", #selector(openPreferences), key: ",")
-        item("屏幕录制权限…", #selector(openPrivacySettings))
         launchAtLoginItem = item("开机自动启动", #selector(toggleLaunchAtLogin))
         menu.addItem(.separator())
         menu.delegate = self
@@ -139,26 +137,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshHotKeyTitles()
     }
 
+    private var delayItem: NSMenuItem?
+
     /// 菜单项上显示当前快捷键
-    private func refreshHotKeyTitles() {
-        func apply(_ mi: NSMenuItem, _ c: HotKeyCombo) {
-            let name = HotKeyCombo.keyName(c.keyCode)
-            if name.count == 1 {
-                mi.keyEquivalent = name.lowercased()
-                var m: NSEvent.ModifierFlags = []
-                if c.modifiers & UInt32(controlKey) != 0 { m.insert(.control) }
-                if c.modifiers & UInt32(optionKey) != 0 { m.insert(.option) }
-                if c.modifiers & UInt32(shiftKey) != 0 { m.insert(.shift) }
-                if c.modifiers & UInt32(cmdKey) != 0 { m.insert(.command) }
-                mi.keyEquivalentModifierMask = m
-            } else {
-                mi.keyEquivalent = ""
-            }
+    private func applyShortcut(_ mi: NSMenuItem, _ a: ShortcutAction) {
+        if let k = a.combo?.menuKeyEquivalent {
+            mi.keyEquivalent = k.key
+            mi.keyEquivalentModifierMask = k.mask
+        } else {
+            mi.keyEquivalent = ""
         }
-        apply(captureItem, Settings.captureHotKey)
-        apply(repeatItem, Settings.repeatHotKey)
-        apply(recordItem, Settings.recordHotKey)
-        statusItem.button?.toolTip = "KShot 截图  \(Settings.captureHotKey.display)"
+    }
+
+    private func refreshHotKeyTitles() {
+        applyShortcut(captureItem, .capture)
+        applyShortcut(repeatItem, .repeatRegion)
+        applyShortcut(recordItem, .record)
+        if let delayItem { applyShortcut(delayItem, .delayCapture) }
+        statusItem.button?.toolTip = "KShot 截图" + ShortcutAction.capture.tipSuffix
     }
 
     private func refreshPinsMenu() {
@@ -174,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.autoenablesItems = false
         add(PinWindow.allHidden ? "显示所有钉图" : "隐藏所有钉图", #selector(togglePins), enabled: count > 0)
+        applyShortcut(menu.items.last!, .togglePins)
         add("恢复所有钉图可点击", #selector(restorePinClicks), enabled: PinWindow.hasClickThrough)
         add("关闭所有钉图", #selector(closePins), enabled: count > 0)
     }
@@ -184,40 +181,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 全局快捷键
 
-    private var repeatHotKey: HotKey?
-    private var recordHotKey: HotKey?
-    private var registered: [HotKeyCombo] = []
+    private var hotKeys: [ShortcutAction: HotKey] = [:]
+    private var registered: [ShortcutAction: HotKeyCombo]?
 
     private func registerHotKey() {
-        let combos = [Settings.captureHotKey, Settings.repeatHotKey, Settings.recordHotKey]
+        var combos: [ShortcutAction: HotKeyCombo] = [:]
+        for a in ShortcutAction.globals { combos[a] = a.combo }
         guard combos != registered else { return }
         registered = combos
-        hotKey = nil
-        repeatHotKey = nil
-        recordHotKey = nil
-        hotKey = HotKey(keyCode: combos[0].keyCode, modifiers: combos[0].modifiers) { [weak self] in self?.takeScreenshot() }
-        repeatHotKey = HotKey(keyCode: combos[1].keyCode, modifiers: combos[1].modifiers) { [weak self] in self?.captureLastRegion() }
-        recordHotKey = HotKey(keyCode: combos[2].keyCode, modifiers: combos[2].modifiers) { [weak self] in self?.toggleRecording() }
-        for (name, ok, c) in [("截图", hotKey != nil, combos[0]), ("截取上次区域", repeatHotKey != nil, combos[1]), ("录屏", recordHotKey != nil, combos[2])] {
-            Log.info(ok ? "快捷键 \(c.display)（\(name)）注册成功" : "注册快捷键 \(c.display)（\(name)）失败，可能被其他应用占用")
+        hotKeys = [:]   // 先全部注销，避免互换两个快捷键时注册冲突
+        for a in ShortcutAction.globals {
+            guard let c = combos[a] else { continue }
+            if let hk = HotKey(keyCode: c.keyCode, modifiers: c.modifiers, handler: { [weak self] in self?.perform(a) }) {
+                hotKeys[a] = hk
+                Log.info("快捷键 \(c.display)（\(a.title)）注册成功")
+            } else {
+                Log.info("注册快捷键 \(c.display)（\(a.title)）失败，可能被其他应用占用")
+            }
         }
         if statusItem != nil { refreshHotKeyTitles() }
     }
 
-    /// 偏好设置里的快捷键是否注册成功
-    func hotKeyFailures() -> [String] {
-        var out: [String] = []
-        if hotKey == nil { out.append("截图") }
-        if repeatHotKey == nil { out.append("截取上次区域") }
-        if recordHotKey == nil { out.append("录屏") }
-        return out
+    private func perform(_ a: ShortcutAction) {
+        switch a {
+        case .capture: takeScreenshot()
+        case .repeatRegion: captureLastRegion()
+        case .delayCapture: CaptureSession.shared.begin(delay: ShortcutAction.delaySeconds)
+        case .record: toggleRecording()
+        case .togglePins: if PinWindow.count > 0 { togglePins() }
+        default: break
+        }
+    }
+
+    /// 已设置但注册失败的全局快捷键
+    func hotKeyFailures() -> [ShortcutAction] {
+        ShortcutAction.globals.filter { $0.combo != nil && hotKeys[$0] == nil }
     }
 
     // MARK: - 开机自动启动
-
-    private var isLaunchAtLoginEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
 
     /// 首次从 /Applications 启动时默认打开开机自启
     private func setupLaunchAtLoginDefault() {
@@ -234,25 +235,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleLaunchAtLogin() {
-        do {
-            if isLaunchAtLoginEnabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-            UserDefaults.standard.set(true, forKey: "didSetupLaunchAtLogin")
-        } catch {
-            Log.info("切换开机自动启动失败: \(error)")
-            let alert = NSAlert()
-            alert.messageText = "无法修改开机自动启动"
-            alert.informativeText = error.localizedDescription + "\n\n可在“系统设置 › 通用 › 登录项与扩展”中手动添加 KShot。"
-            alert.runModal()
-        }
+        LaunchAtLogin.set(!LaunchAtLogin.isEnabled)
         refreshLaunchAtLoginItem()
     }
 
     private func refreshLaunchAtLoginItem() {
-        launchAtLoginItem.state = isLaunchAtLoginEnabled ? .on : .off
+        launchAtLoginItem.state = LaunchAtLogin.isEnabled ? .on : .off
     }
 
     // MARK: - Actions
@@ -277,12 +265,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PreferencesWindow.show()
     }
 
-    @objc private func openPrivacySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -293,5 +275,24 @@ extension AppDelegate: NSMenuDelegate {
         refreshLaunchAtLoginItem()
         refreshPinsMenu()
         recordItem.title = ScreenRecorder.isRecording ? "停止录屏" : "录屏"
+    }
+}
+
+/// 开机自动启动（登录项）
+@MainActor
+enum LaunchAtLogin {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    static func set(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            UserDefaults.standard.set(true, forKey: "didSetupLaunchAtLogin")
+        } catch {
+            Log.info("切换开机自动启动失败: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "无法修改开机自动启动"
+            alert.informativeText = error.localizedDescription + "\n\n可在“系统设置 › 通用 › 登录项与扩展”中手动添加 KShot。"
+            alert.runModal()
+        }
     }
 }

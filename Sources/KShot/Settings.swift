@@ -2,23 +2,51 @@ import AppKit
 import Carbon
 import UniformTypeIdentifiers
 
-/// 全局快捷键组合（Carbon 键码 + Carbon 修饰键）
-struct HotKeyCombo: Equatable, Codable {
+/// 快捷键组合（Carbon 键码 + Carbon 修饰键）
+struct HotKeyCombo: Equatable, Hashable, Codable {
     var keyCode: UInt32
     var modifiers: UInt32
 
-    static let capture = HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(controlKey | cmdKey))
-    static let repeatRegion = HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(controlKey | shiftKey | cmdKey))
-    static let record = HotKeyCombo(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(controlKey | cmdKey))
+    init(keyCode: UInt32, modifiers: UInt32) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+    }
+
+    init(_ key: Int, _ mods: Int) {
+        self.init(keyCode: UInt32(key), modifiers: UInt32(mods))
+    }
+
+    init(event: NSEvent) {
+        self.init(keyCode: UInt32(event.keyCode), modifiers: HotKeyCombo.carbonModifiers(event.modifierFlags))
+    }
+
+    func matches(_ event: NSEvent) -> Bool {
+        UInt32(event.keyCode) == keyCode && HotKeyCombo.carbonModifiers(event.modifierFlags) == modifiers
+    }
+
+    /// 菜单项的 keyEquivalent（只支持单字符键）
+    var menuKeyEquivalent: (key: String, mask: NSEvent.ModifierFlags)? {
+        let name = HotKeyCombo.keyName(keyCode)
+        guard name.count == 1 else { return nil }
+        var m: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(controlKey) != 0 { m.insert(.control) }
+        if modifiers & UInt32(optionKey) != 0 { m.insert(.option) }
+        if modifiers & UInt32(shiftKey) != 0 { m.insert(.shift) }
+        if modifiers & UInt32(cmdKey) != 0 { m.insert(.command) }
+        return (name.lowercased(), m)
+    }
 
     /// 形如 “⌃⇧⌘A” 的显示文字
-    var display: String {
-        var s = ""
-        if modifiers & UInt32(controlKey) != 0 { s += "⌃" }
-        if modifiers & UInt32(optionKey) != 0 { s += "⌥" }
-        if modifiers & UInt32(shiftKey) != 0 { s += "⇧" }
-        if modifiers & UInt32(cmdKey) != 0 { s += "⌘" }
-        return s + HotKeyCombo.keyName(keyCode)
+    var display: String { parts.joined() }
+
+    /// 逐个按键：["⌃", "⇧", "⌘", "A"]
+    var parts: [String] {
+        var p: [String] = []
+        if modifiers & UInt32(controlKey) != 0 { p.append("⌃") }
+        if modifiers & UInt32(optionKey) != 0 { p.append("⌥") }
+        if modifiers & UInt32(shiftKey) != 0 { p.append("⇧") }
+        if modifiers & UInt32(cmdKey) != 0 { p.append("⌘") }
+        return p + [HotKeyCombo.keyName(keyCode)]
     }
 
     /// NSEvent 修饰键 → Carbon 修饰键
@@ -56,6 +84,84 @@ struct HotKeyCombo: Equatable, Codable {
     }
 }
 
+/// 可在偏好设置里自定义快捷键的操作
+enum ShortcutAction: String, CaseIterable {
+    // 全局（任何应用中可用）
+    case capture, repeatRegion, delayCapture, record, togglePins
+    // 截图时（选区或编辑窗口中可用）
+    case confirm, save, pin, longShot, recordRegion, beautify, ocr, translate, redact, undo, redo
+
+    static let globals: [ShortcutAction] = [.capture, .repeatRegion, .delayCapture, .record, .togglePins]
+    static let locals: [ShortcutAction] = [.confirm, .save, .pin, .longShot, .recordRegion, .beautify, .ocr, .translate, .redact, .undo, .redo]
+
+    /// 全局“延时截图”快捷键的延时秒数
+    static let delaySeconds = 5
+
+    var isGlobal: Bool { ShortcutAction.globals.contains(self) }
+
+    var title: String {
+        switch self {
+        case .capture: return "截图"
+        case .repeatRegion: return "截取上次区域"
+        case .delayCapture: return "延时 \(ShortcutAction.delaySeconds) 秒截图"
+        case .record: return "录屏 / 停止录屏"
+        case .togglePins: return "显示 / 隐藏钉图"
+        case .confirm: return "完成（复制）"
+        case .save: return "保存"
+        case .pin: return "钉在屏幕上"
+        case .longShot: return "长截图"
+        case .recordRegion: return "录制选区"
+        case .beautify: return "美化"
+        case .ocr: return "提取文字 / 二维码"
+        case .translate: return "翻译"
+        case .redact: return "自动打码"
+        case .undo: return "撤销"
+        case .redo: return "重做"
+        }
+    }
+
+    var defaultCombo: HotKeyCombo? {
+        switch self {
+        case .capture: return HotKeyCombo(kVK_ANSI_A, controlKey | cmdKey)
+        case .repeatRegion: return HotKeyCombo(kVK_ANSI_A, controlKey | shiftKey | cmdKey)
+        case .delayCapture, .togglePins: return nil
+        case .record: return HotKeyCombo(kVK_ANSI_R, controlKey | cmdKey)
+        case .confirm: return HotKeyCombo(kVK_ANSI_C, cmdKey)
+        case .save: return HotKeyCombo(kVK_ANSI_S, cmdKey)
+        case .pin: return HotKeyCombo(kVK_ANSI_P, cmdKey)
+        case .longShot: return HotKeyCombo(kVK_ANSI_K, cmdKey)
+        case .recordRegion: return HotKeyCombo(kVK_ANSI_R, cmdKey)
+        case .beautify: return HotKeyCombo(kVK_ANSI_B, cmdKey)
+        case .ocr: return HotKeyCombo(kVK_ANSI_T, cmdKey)
+        case .translate: return HotKeyCombo(kVK_ANSI_L, cmdKey)
+        case .redact: return HotKeyCombo(kVK_ANSI_E, cmdKey)
+        case .undo: return HotKeyCombo(kVK_ANSI_Z, cmdKey)
+        case .redo: return HotKeyCombo(kVK_ANSI_Z, shiftKey | cmdKey)
+        }
+    }
+
+    /// UserDefaults 键名（前三个沿用旧版本的键）
+    fileprivate var storageKey: String {
+        switch self {
+        case .capture: return "hotkey.capture"
+        case .repeatRegion: return "hotkey.repeat"
+        case .record: return "hotkey.record"
+        default: return "hotkey.\(rawValue)"
+        }
+    }
+
+    /// 当前快捷键，nil 表示未设置
+    var combo: HotKeyCombo? { Settings.shortcut(self) }
+
+    /// 工具条提示里的快捷键后缀，如 “  ⌘S”
+    var tipSuffix: String { combo.map { "  " + $0.display } ?? "" }
+
+    /// 截图时按下的键对应哪个操作
+    static func local(matching event: NSEvent) -> ShortcutAction? {
+        locals.first { $0.combo?.matches(event) == true }
+    }
+}
+
 enum ImageFormat: String, CaseIterable {
     case png, jpeg, heic
 
@@ -89,27 +195,32 @@ enum Settings {
     static let changed = Notification.Name("KShotSettingsChanged")
     private static let d = UserDefaults.standard
 
-    private static func combo(_ key: String, _ def: HotKeyCombo) -> HotKeyCombo {
-        guard let data = d.data(forKey: key), let c = try? JSONDecoder().decode(HotKeyCombo.self, from: data) else { return def }
-        return c
-    }
-    private static func setCombo(_ key: String, _ c: HotKeyCombo) {
-        d.set(try? JSONEncoder().encode(c), forKey: key)
-        notify()
-    }
     private static func notify() { NotificationCenter.default.post(name: changed, object: nil) }
 
-    static var captureHotKey: HotKeyCombo {
-        get { combo("hotkey.capture", .capture) }
-        set { setCombo("hotkey.capture", newValue) }
+    // MARK: - 快捷键
+
+    static func shortcut(_ a: ShortcutAction) -> HotKeyCombo? {
+        // 存的是 JSON：组合键或 null（用户清除）；没存过用默认值
+        guard let data = d.data(forKey: a.storageKey) else { return a.defaultCombo }
+        do {
+            return try JSONDecoder().decode(HotKeyCombo?.self, from: data)
+        } catch {
+            return a.defaultCombo
+        }
     }
-    static var repeatHotKey: HotKeyCombo {
-        get { combo("hotkey.repeat", .repeatRegion) }
-        set { setCombo("hotkey.repeat", newValue) }
+
+    static func setShortcut(_ a: ShortcutAction, _ c: HotKeyCombo?, notify post: Bool = true) {
+        if c == a.defaultCombo {
+            d.removeObject(forKey: a.storageKey)
+        } else {
+            d.set(try? JSONEncoder().encode(c), forKey: a.storageKey)
+        }
+        if post { notify() }
     }
-    static var recordHotKey: HotKeyCombo {
-        get { combo("hotkey.record", .record) }
-        set { setCombo("hotkey.record", newValue) }
+
+    static func resetAllShortcuts() {
+        for a in ShortcutAction.allCases { setShortcut(a, a.defaultCombo, notify: false) }
+        notify()
     }
 
     /// 默认保存目录

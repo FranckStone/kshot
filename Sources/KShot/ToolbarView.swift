@@ -194,22 +194,22 @@ final class ToolbarView: NSView {
             loupeButton = items.last!.button
         }
         separatorsAfter.insert(items.count - 1)
-        add(.undo, "arrow.uturn.backward", "撤销  ⌘Z")
+        add(.undo, "arrow.uturn.backward", "撤销" + ShortcutAction.undo.tipSuffix)
         undoButton = items.last!.button
-        add(.redo, "arrow.uturn.forward", "重做  ⇧⌘Z")
+        add(.redo, "arrow.uturn.forward", "重做" + ShortcutAction.redo.tipSuffix)
         redoButton = items.last!.button
         separatorsAfter.insert(items.count - 1)
         if mode == .screen {
-            add(.pin, "pin", "钉在屏幕上  ⌘P")
-            add(.longShot, "rectangle.expand.vertical", fallback: "arrow.up.and.down", "长截图（滚动截图）  ⌘K")
-            add(.record, "record.circle", "录屏  ⌘R")
+            add(.pin, "pin", "钉在屏幕上" + ShortcutAction.pin.tipSuffix)
+            add(.longShot, "rectangle.expand.vertical", fallback: "arrow.up.and.down", "长截图（滚动截图）" + ShortcutAction.longShot.tipSuffix)
+            add(.record, "record.circle", "录屏" + ShortcutAction.recordRegion.tipSuffix)
         }
-        add(.beautify, "sparkles", "美化（背景、圆角、阴影）  ⌘B")
-        add(.save, "square.and.arrow.down", "保存  ⌘S")
+        add(.beautify, "sparkles", "美化（背景、圆角、阴影）" + ShortcutAction.beautify.tipSuffix)
+        add(.save, "square.and.arrow.down", "保存" + ShortcutAction.save.tipSuffix)
         separatorsAfter.insert(items.count - 1)
-        add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字 / 二维码  ⌘T")
-        add(.translate, "translate", fallback: "globe", "翻译  ⌘L")
-        add(.redact, "eye.slash", "自动打码（手机号、邮箱、证件号、银行卡、密钥）  ⌘E")
+        add(.ocr, "text.viewfinder", fallback: "doc.text.viewfinder", "提取文字 / 二维码" + ShortcutAction.ocr.tipSuffix)
+        add(.translate, "translate", fallback: "globe", "翻译" + ShortcutAction.translate.tipSuffix)
+        add(.redact, "eye.slash", "自动打码（手机号、邮箱、证件号、银行卡、密钥）" + ShortcutAction.redact.tipSuffix)
         separatorsAfter.insert(items.count - 1)
         add(.cancel, "xmark", "取消  Esc", role: .destructive)
         add(.confirm, "checkmark", "完成  ⏎", role: .prominent)

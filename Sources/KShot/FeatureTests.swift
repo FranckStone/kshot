@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import CoreImage
 import AVFoundation
 
@@ -127,11 +128,62 @@ enum FeatureTests {
     }
 
     static func prefsTest() {
-        PreferencesWindow.show()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let w = NSApp.windows.first(where: { $0 is PreferencesWindow }) { snapshot(w, "prefs-window.png") }
-            NSApp.terminate(nil)
+        shortcutTest()
+        // 逐页抓真实窗口（含玻璃效果）；抓不到（锁屏等）时退回离屏快照
+        var steps: [(PreferencesWindow.Tab, String?)] = PreferencesWindow.Tab.allCases.map { ($0, nil) }
+        steps += [(.general, "light"), (.shortcuts, "light"), (.shortcuts, "recording"), (.general, "hover")]
+        func next() {
+            guard !steps.isEmpty else { NSApp.terminate(nil); return }
+            let (tab, variant) = steps.removeFirst()
+            if variant == "light" { NSApp.appearance = NSAppearance(named: .aqua) }
+            PreferencesWindow.show(tab: tab)
+            guard let w = NSApp.windows.first(where: { $0 is PreferencesWindow }) as? PreferencesWindow else { return }
+            if variant == "recording" { w.debugModel.startRecording(.repeatRegion) }
+            if variant == "hover" {
+                // 把鼠标移到窗口按钮上，抓悬停状态（抓完移回原处）
+                let old = NSEvent.mouseLocation
+                CGWarpMouseCursorPosition(CGPoint(x: w.frame.minX + 55, y: NSScreen.primaryHeight - (w.frame.maxY - 32)))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { CGWarpMouseCursorPosition(CGPoint(x: old.x, y: NSScreen.primaryHeight - old.y)) }
+            }
+            let name = "prefs-\(tab.rawValue)\(variant.map { "-\($0)" } ?? "").png"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                Task { @MainActor in
+                    if let img = await WindowShadow.captureRaw(windowID: CGWindowID(w.windowNumber)) {
+                        write(img, name)
+                    } else {
+                        snapshot(w, name)
+                    }
+                    w.debugModel.stopRecording()
+                    next()
+                }
+            }
         }
+        next()
+    }
+
+    /// 快捷键的存取与匹配（结束时还原用户原来的设置）
+    static func shortcutTest() {
+        let saved = ShortcutAction.allCases.map { ($0, $0.combo) }
+        defer { for (a, c) in saved { Settings.setShortcut(a, c, notify: false) } }
+        func key(_ code: Int, _ flags: NSEvent.ModifierFlags) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                             characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(code))!
+        }
+        Settings.resetAllShortcuts()
+        var ok = true
+        func check(_ cond: Bool, _ what: String) { if !cond { ok = false; Log.info("❌ shortcut: \(what)") } }
+        check(ShortcutAction.local(matching: key(kVK_ANSI_S, .command)) == .save, "⌘S → 保存")
+        check(ShortcutAction.local(matching: key(kVK_ANSI_Z, [.command, .shift])) == .redo, "⇧⌘Z → 重做")
+        check(ShortcutAction.local(matching: key(kVK_ANSI_S, [.command, .shift])) == nil, "⇧⌘S 不匹配")
+        Settings.setShortcut(.save, HotKeyCombo(kVK_ANSI_S, optionKey | cmdKey))
+        check(ShortcutAction.local(matching: key(kVK_ANSI_S, .command)) == nil, "改键后 ⌘S 不再保存")
+        check(ShortcutAction.local(matching: key(kVK_ANSI_S, [.command, .option])) == .save, "⌥⌘S → 保存")
+        Settings.setShortcut(.pin, nil)
+        check(ShortcutAction.pin.combo == nil, "清除后为未设置")
+        check(ShortcutAction.local(matching: key(kVK_ANSI_P, .command)) == nil, "清除后 ⌘P 无效")
+        Settings.resetAllShortcuts()
+        check(ShortcutAction.pin.combo == ShortcutAction.pin.defaultCombo, "恢复默认")
+        Log.info(ok ? "✅ shortcut test passed" : "❌ shortcut test failed")
     }
 
     /// 编辑窗口：画几个新工具，选中并移动一个，导出
