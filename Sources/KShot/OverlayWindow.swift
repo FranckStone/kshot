@@ -19,7 +19,12 @@ final class OverlayWindow: NSWindow {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         contentView = overlayView
         disableCursorRects()
+        // 副屏：确保窗口正好盖住这块屏幕（不让系统把位置挪到主屏范围内）
+        setFrame(frame, display: false)
     }
+
+    /// 不让系统调整遮罩窗口的位置 / 大小（副屏在主屏上方或尺寸不同时，默认会被“修正”）
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }

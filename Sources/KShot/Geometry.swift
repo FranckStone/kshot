@@ -6,6 +6,15 @@ extension NSScreen {
         return (deviceDescription[key] as? NSNumber)?.uint32Value ?? 0
     }
 
+    /// 是否是 Mac 内置屏（四角是圆的）；外接显示器四角是直角
+    var isBuiltIn: Bool {
+        if CommandLine.arguments.contains("--assume-external") { return false }
+        return CGDisplayIsBuiltin(displayID) != 0
+    }
+
+    /// 屏幕物理圆角（pt）：内置屏有圆角，外接显示器为 0
+    var physicalCornerRadius: CGFloat { isBuiltIn ? 20 : 0 }
+
     /// 主屏（带菜单栏）的高度，用于 Cocoa ⇄ CG 坐标转换。
     static var primaryHeight: CGFloat {
         NSScreen.screens.first?.frame.height ?? 0

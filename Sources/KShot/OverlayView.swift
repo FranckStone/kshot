@@ -50,8 +50,6 @@ final class OverlayView: NSView {
     private static let fullScreenDimAlpha: CGFloat = 0.25
     private static let handleRadius: CGFloat = 7
     private static let handleHitSlop: CGFloat = 8
-    /// 屏幕物理圆角（MacBook 刘海屏约 12pt；外接直角屏幕上圆角也无伤大雅）
-    private static let screenCornerRadius: CGFloat = 20
     /// macOS 窗口圆角
     private static let windowCornerRadius: CGFloat = 10
 
@@ -221,7 +219,7 @@ final class OverlayView: NSView {
         let isFullScreen = self.isFullScreen(rect)
         // 整屏时玻璃框贴在屏幕边缘内侧，并用屏幕角的弧度；窗口时略大于窗口圆角
         let f = isFullScreen ? bounds : rect.insetBy(dx: -t, dy: -t)
-        let radius: CGFloat = isFullScreen ? OverlayView.screenCornerRadius : OverlayView.windowCornerRadius + t
+        let radius: CGFloat = isFullScreen ? screen.physicalCornerRadius : OverlayView.windowCornerRadius + t
         if hoverFrame.frame != f || hoverFrame.cornerRadius != radius {
             hoverFrame.frame = f
             hoverFrame.cornerRadius = radius
