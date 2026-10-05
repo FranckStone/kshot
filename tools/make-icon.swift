@@ -89,6 +89,71 @@ func drawCorners(_ ctx: CGContext, _ rect: CGRect) {
     ctx.restoreGState()
 }
 
+// 0b. 取景框 + 中心图形（几种备选）
+func drawCornersWith(_ ctx: CGContext, _ rect: CGRect, center kind: String) {
+    drawCorners(ctx, rect)
+    let box = rect.insetBy(dx: rect.width * 0.1, dy: rect.height * 0.1)
+    let s = box.width
+    let c = CGPoint(x: box.midX, y: box.midY)
+    ctx.saveGState()
+    softShadow(ctx, s)
+    ctx.setFillColor(rgb(0xFFFFFF)); ctx.setStrokeColor(rgb(0xFFFFFF))
+    ctx.setLineCap(.round); ctx.setLineJoin(.round)
+    switch kind {
+    case "dot":
+        // 实心圆点：快门 / 对焦点
+        let r = s * 0.085
+        ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+    case "ring":
+        // 镜头：外环 + 内点
+        let r = s * 0.15
+        ctx.setLineWidth(s * 0.05)
+        ctx.strokeEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+        let r2 = s * 0.055
+        ctx.fillEllipse(in: CGRect(x: c.x - r2, y: c.y - r2, width: r2 * 2, height: r2 * 2))
+    case "cross":
+        // 十字准星
+        let a = s * 0.11
+        ctx.setLineWidth(s * 0.05)
+        ctx.move(to: CGPoint(x: c.x - a, y: c.y)); ctx.addLine(to: CGPoint(x: c.x + a, y: c.y))
+        ctx.move(to: CGPoint(x: c.x, y: c.y - a)); ctx.addLine(to: CGPoint(x: c.x, y: c.y + a))
+        ctx.strokePath()
+    case "spark":
+        // 四角星：闪光 / 截取的瞬间
+        let R = s * 0.15, r = s * 0.035
+        let path = CGMutablePath()
+        for i in 0..<8 {
+            let ang = CGFloat(i) * .pi / 4 + .pi / 2
+            let rad = i % 2 == 0 ? R : r
+            let p = CGPoint(x: c.x + cos(ang) * rad, y: c.y + sin(ang) * rad)
+            if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
+        }
+        path.closeSubpath()
+        ctx.addPath(path); ctx.fillPath()
+    case "aperture":
+        // 小光圈：六片叶片
+        let R = s * 0.15, rr = s * 0.055, w = s * 0.04
+        ctx.setLineWidth(w)
+        ctx.strokeEllipse(in: CGRect(x: c.x - R, y: c.y - R, width: R * 2, height: R * 2))
+        ctx.saveGState()
+        ctx.addEllipse(in: CGRect(x: c.x - R + w * 0.4, y: c.y - R + w * 0.4, width: (R - w * 0.4) * 2, height: (R - w * 0.4) * 2))
+        ctx.clip()
+        ctx.setLineWidth(w * 0.85); ctx.setLineCap(.butt)
+        for i in 0..<6 {
+            let a = CGFloat(i) * 60 + 15
+            let t = CGPoint(x: c.x + rr * u(a).x, y: c.y + rr * u(a).y)
+            let d = u(a + 90)
+            ctx.move(to: CGPoint(x: t.x - d.x * rr * 0.577, y: t.y - d.y * rr * 0.577))
+            ctx.addLine(to: CGPoint(x: t.x + d.x * R * 1.5, y: t.y + d.y * R * 1.5))
+        }
+        ctx.strokePath()
+        ctx.restoreGState()
+    default:
+        break
+    }
+    ctx.restoreGState()
+}
+
 // 2. 裁切：两个互扣的 L 形
 func drawCrop(_ ctx: CGContext, _ rect: CGRect) {
     let box = drawBase(ctx, rect, top: 0x34E08A, mid: 0x07C160, bottom: 0x05874A)
@@ -256,11 +321,19 @@ func drawFold(_ ctx: CGContext, _ rect: CGRect, palette pal: FoldPalette) {
 }
 
 var drawers: [(String, (CGContext, CGRect) -> Void)] = [
-    ("corners", drawCorners), ("aperture", drawAperture), ("crop", drawCrop), ("lens", drawLens), ("glow", drawGlow), ("fold", drawFold),
+    ("corners", drawCorners),
+    ("corners-dot", { drawCornersWith($0, $1, center: "dot") }),
+    ("corners-ring", { drawCornersWith($0, $1, center: "ring") }),
+    ("corners-cross", { drawCornersWith($0, $1, center: "cross") }),
+    ("corners-spark", { drawCornersWith($0, $1, center: "spark") }),
+    ("corners-aperture", { drawCornersWith($0, $1, center: "aperture") }),
+    ("aperture", drawAperture), ("crop", drawCrop), ("lens", drawLens), ("glow", drawGlow), ("fold", drawFold),
 ]
 for (name, pal) in foldPalettes { drawers.append(("fold-\(name)", { ctx, rect in drawFold(ctx, rect, palette: pal) })) }
 // 拼图：sheet 显示五种风格；sheet-fold 显示折角方案的各种配色
-let sheetNames: [String] = variant == "sheet-fold"
+let sheetNames: [String] = variant == "sheet-center"
+    ? ["corners-dot", "corners-ring", "corners-cross", "corners-spark", "corners-aperture"]
+    : variant == "sheet-fold"
     ? ["fold-blue", "fold-orange", "fold-purple", "fold-teal", "fold-graphite"]
     : ["aperture", "crop", "lens", "glow", "fold"]
 let sheetDrawers = sheetNames.map { n in drawers.first { $0.0 == n }! }

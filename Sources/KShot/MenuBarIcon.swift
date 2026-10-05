@@ -1,6 +1,6 @@
 import AppKit
 
-/// 菜单栏图标：与 App 图标一致的取景框四角（模板图，自动适配深浅色菜单栏）
+/// 菜单栏图标：与 App 图标一致的取景框四角 + 十字准星（模板图，自动适配深浅色菜单栏）
 enum MenuBarIcon {
     static func make() -> NSImage {
         let size = NSSize(width: 18, height: 18)
@@ -20,6 +20,11 @@ enum MenuBarIcon {
                 (CGPoint(x: frame.minX + arm, y: frame.minY), CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.minX, y: frame.minY + arm)),
             ]
             for (a, b, c) in corners { ctx.move(to: a); ctx.addLine(to: b); ctx.addLine(to: c) }
+            // 中间的十字准星
+            let c = CGPoint(x: rect.midX, y: rect.midY)
+            let arm2 = s * 0.14
+            ctx.move(to: CGPoint(x: c.x - arm2, y: c.y)); ctx.addLine(to: CGPoint(x: c.x + arm2, y: c.y))
+            ctx.move(to: CGPoint(x: c.x, y: c.y - arm2)); ctx.addLine(to: CGPoint(x: c.x, y: c.y + arm2))
             ctx.strokePath()
             return true
         }

@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TMP="$(mktemp -d)"
 swiftc -O tools/make-icon.swift -o "$TMP/make-icon" 2>&1 | grep -v warning || true
-"$TMP/make-icon" "${ICON_VARIANT:-corners}" Resources/AppIcon-1024.png
+"$TMP/make-icon" "${ICON_VARIANT:-corners-cross}" Resources/AppIcon-1024.png
 ICONSET="$TMP/AppIcon.iconset"
 mkdir -p "$ICONSET"
 for s in 16 32 128 256 512; do
