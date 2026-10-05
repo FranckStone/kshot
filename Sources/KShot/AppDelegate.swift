@@ -18,6 +18,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
         }
+        if CommandLine.arguments.contains("--vision-probe") {
+            StitchProbe.run()
+            NSApp.terminate(nil)
+            return
+        }
         if CommandLine.arguments.contains("--stitch-test") {
             StitchTest.run()
             NSApp.terminate(nil)

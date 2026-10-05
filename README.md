@@ -122,8 +122,12 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
 - `Translator.swift` 基于系统 Translation 框架的翻译器（通过隐藏的 SwiftUI 宿主视图驱动）
-- `LongScreenshot.swift` / `ImageStitcher.swift` 长截图会话（持续抓帧、实时预览面板、可选自动滚动）与以“最后拼接帧”为锚点的拼接算法（自动识别固定顶栏/底栏）
+- `LongScreenshot.swift` / `RegionStream.swift` / `ImageStitcher.swift` / `VisionOffsetEstimator.swift` 长截图：SCStream 60fps 区域捕获、实时预览面板、可选自动滚动；帧间位移用 Vision 平移配准做 5 横带多数投票（移植自 [ScrollSnap](https://github.com/Brkgng/ScrollSnap)，MIT），再用行签名精修到整像素，自动识别固定顶栏/底栏，支持往回滚
 - `ImageEditorWindow.swift` 图片编辑窗口（长截图完成后的标注画布，复用工具条与标注渲染）
 - `MenuBarIcon.swift` 菜单栏模板图标
 - `DemoScene.swift` 演示模式的示例桌面
 - `tools/make-icon.swift` App 图标生成脚本（含多种备选风格）
+
+## 致谢
+
+- 长截图的帧间位移估计（Vision 平移配准 + 横带多数投票）移植自 [ScrollSnap](https://github.com/Brkgng/ScrollSnap)（MIT License）。

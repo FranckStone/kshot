@@ -16,7 +16,6 @@ final class LongScreenshotSession {
     private var noMatchCount = 0
     private var autoScroll = false
     private var excluded: Set<CGWindowID> = []
-    private var capturer: RegionCapturer?
     private var lastHint = ""
 
     /// 调试：用自定义方式滚动（替代发送系统滚轮事件）
@@ -70,68 +69,139 @@ final class LongScreenshotSession {
                 return
             }
         }
-        autoScroll.toggle()
         staticCount = 0
-        panel.setAuto(autoScroll)
+        lastAppendTime = Date()
+        setAuto(!autoScroll)
         panel.setStatus(autoScroll ? "正在自动滚动…到底后自动停止，也可随时按回车完成" : "已切回手动：请自己滚动内容")
     }
 
+    private var stream: RegionStream?
+    private var autoTimer: Timer?
+    private var lastAppendTime = Date()
+    /// 自动滚动步进锁：发出一次滚动后，必须等到一帧处理完才发下一次
+    private var awaitingFrame = false
+    private var lastScrollAt = Date.distantPast
+    private var dumpNoMatchBudget = 12
+
     private func loop() async {
         do {
-            // 演示模式的目标窗口也是本应用的，只按窗口号排除面板
-            capturer = try await RegionCapturer(screen: screen, localRect: region, excludingWindowIDs: excluded, excludeOwnApp: customScroller == nil)
+            stream = try await RegionStream(screen: screen, localRect: region, excludingWindowIDs: excluded,
+                                            excludeOwnApp: customScroller == nil, trimBottom: Self.bottomTrimPx) { [weak self] frame in
+                self?.process(frame)
+            }
+            setAuto(autoScroll)
         } catch {
             fail("抓屏失败：\(error.localizedDescription)")
             return
         }
-        guard let first = await captureFrame() else { fail("抓屏失败"); return }
-        dump(first.image)
-        _ = stitcher.push(frame: first)
-        frames = 1
-        updatePanel()
-
-        while running {
-            if autoScroll {
-                postScroll()
-                try? await Task.sleep(for: .milliseconds(160))
-            } else {
-                // 手动模式尽量高帧率，快速滑动也能接上
-                try? await Task.sleep(for: .milliseconds(30))
-            }
-            guard running, let frame = await captureFrame() else { continue }
-            let expected = autoScroll ? Int(scrollStep * screen.backingScaleFactor) : 0
-            switch stitcher.push(frame: frame, expectedShift: expected) {
-            case .appended(let rows):
-                frames += 1
-                staticCount = 0
-                noMatchCount = 0
-                dump(frame.image)
-                let d = stitcher.lastDiagnostics
-                Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", d.score)), header \(d.header), footer \(d.footer)), total \(stitcher.totalHeight)")
-                hint("")
-                updatePanel()
-            case .unchanged:
-                staticCount += 1
-                if autoScroll && staticCount >= 3 {
+        // 自动滚动：定时发滚轮事件；1.2 秒没有新内容视为到底
+        autoTimer = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.running, self.autoScroll else { return }
+                // 上一次滚动的画面还没处理完就不再滚；超过 0.6 秒没回音也放行，避免卡死
+                if !self.awaitingFrame || Date().timeIntervalSince(self.lastScrollAt) > 0.6 {
+                    self.awaitingFrame = true
+                    self.lastScrollAt = Date()
+                    self.postScroll()
+                }
+                if Date().timeIntervalSince(self.lastAppendTime) > 1.2, self.frames > 0 {
                     Log.info("longshot reached bottom")
-                    finish()
+                    self.finish()
                 }
-            case .scrolledUp:
-                hint("往回滚了，继续向下滚动即可")
-            case .noMatch:
-                staticCount = 0
-                noMatchCount += 1
-                // 偶尔一帧接不上多半是渲染中的撕裂画面，连续多帧才提示
-                guard noMatchCount >= (autoScroll ? 3 : 6) else { continue }
-                dump(frame.image)
-                let d = stitcher.lastDiagnostics
-                if noMatchCount <= 8 || noMatchCount % 50 == 0 {
-                    Log.info("longshot no match x\(noMatchCount): \(d.reason) shift \(d.shift) score \(String(format: "%.2f", d.score)) halves \(String(format: "%.2f/%.2f", d.halves.0, d.halves.1)) header \(d.header) footer \(d.footer)")
-                }
-                hint(autoScroll ? "画面变化太大，已暂停自动滚动" : "滚得太快，接不上了：请往回滚一点再继续")
-                if autoScroll { autoScroll = false; panel.setAuto(false) }
             }
         }
+    }
+
+    /// 捕获队列上的状态（只在 RegionStream 的回调队列里读写）
+    nonisolated(unsafe) private var workerAuto = false
+    nonisolated(unsafe) private var workerExpected = 0
+    nonisolated(unsafe) private var workerFrames = 0
+    nonisolated(unsafe) private var workerNoMatch = 0
+    nonisolated(unsafe) private var lastPreviewAt = Date.distantPast
+
+    /// 在捕获队列上拼接（不占主线程），只把结果和节流后的预览发回主线程
+    nonisolated(unsafe) private var procTotal = 0.0
+    nonisolated(unsafe) private var procCount = 0
+    nonisolated(unsafe) private var sourceCounts: [String: Int] = [:]
+
+    nonisolated private func process(_ frame: ImageStitcher.Frame) {
+        let t0 = Date()
+        defer {
+            procTotal += Date().timeIntervalSince(t0); procCount += 1
+            sourceCounts[stitcher.lastDiagnostics.reason, default: 0] += 1
+        }
+        let outcome: ImageStitcher.Outcome
+        if workerFrames == 0 {
+            outcome = stitcher.push(frame: frame)
+        } else {
+            outcome = stitcher.push(frame: frame, expectedShift: workerAuto ? workerExpected : 0)
+        }
+        if ProcessInfo.processInfo.environment["KSHOT_TRACE"] != nil || CommandLine.arguments.contains("--trace") {
+            let d = stitcher.lastDiagnostics
+            Log.info("trace outcome=\(outcome) shift=\(d.shift) rough=\(String(format: "%.1f", d.rough)) src=\(d.reason) h=\(frame.height)")
+        }
+        var preview: CGImage?
+        switch outcome {
+        case .appended:
+            workerFrames += 1
+            workerNoMatch = 0
+            if Date().timeIntervalSince(lastPreviewAt) > 0.12 {
+                lastPreviewAt = Date()
+                preview = stitcher.preview(minHeight: frame.height * 3 / 2)
+            }
+        case .noMatch:
+            workerNoMatch += 1
+        default:
+            break
+        }
+        let total = stitcher.totalHeight
+        let diag = stitcher.lastDiagnostics
+        let noMatch = workerNoMatch
+        let image = frame.image
+        Task { @MainActor in self.apply(outcome, total: total, diag: diag, noMatch: noMatch, preview: preview, image: image) }
+    }
+
+    private func apply(_ outcome: ImageStitcher.Outcome, total: Int, diag: ImageStitcher.Diagnostics, noMatch: Int, preview: CGImage?, image: CGImage) {
+        guard running else { return }
+        // 滚动后至少过 60ms 的帧才算“已看到这次滚动的结果”（避开滚动前已在队列里的旧帧）
+        if Date().timeIntervalSince(lastScrollAt) > 0.06 { awaitingFrame = false }
+        switch outcome {
+        case .appended(let rows):
+            frames += 1
+            lastAppendTime = Date()
+            if frames <= 3 || frames % 10 == 0 { dump(image) }
+            if frames % 5 == 0 || rows > 200 {
+                Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", diag.score)), header \(diag.header), footer \(diag.footer)), total \(total)")
+            }
+            hint("")
+            panel.setProgress(frames: frames, height: total)
+            if let preview { panel.setPreview(preview, scale: screen.backingScaleFactor) }
+        case .unchanged:
+            break
+        case .scrolledUp:
+            hint("往回滚了，继续向下滚动即可")
+        case .noMatch:
+            let threshold = autoScroll ? 3 : 8
+            guard noMatch >= threshold else { return }
+            if noMatch == threshold, dumpNoMatchBudget > 0 { dumpNoMatchBudget -= 1; dump(image) }
+            if noMatch <= threshold + 2 || noMatch % 60 == 0 {
+                Log.info("longshot no match x\(noMatch): \(diag.reason) shift \(diag.shift) score \(String(format: "%.2f", diag.score)) halves \(String(format: "%.2f/%.2f", diag.halves.0, diag.halves.1))")
+            }
+            hint(autoScroll ? "画面变化太大，已暂停自动滚动" : "滚得太快，接不上了：请往回滚一点再继续")
+            if autoScroll { setAuto(false) }
+        }
+    }
+
+    private func setAuto(_ on: Bool) {
+        autoScroll = on
+        let expected = Int(scrollStep * screen.backingScaleFactor)
+        streamQueueSync { self.workerAuto = on; self.workerExpected = expected }
+        panel.setAuto(on)
+    }
+
+    /// 在捕获队列上同步执行（保证与 process 串行）
+    private func streamQueueSync(_ body: () -> Void) {
+        if let stream { stream.queueSync(body) } else { body() }
     }
 
     private func hint(_ s: String) {
@@ -151,19 +221,19 @@ final class LongScreenshotSession {
     /// 每帧忽略底部的几个像素：区域贴着窗口底边时，窗口圆角/阴影会在每个接缝处留下痕迹
     private static let bottomTrimPx = 26
 
-    private func captureFrame() async -> ImageStitcher.Frame? {
-        guard let capturer, let raw = try? await capturer.capture() else { return nil }
-        let trim = Self.bottomTrimPx
-        let img = raw.height > trim * 4 ? (raw.cropping(to: CGRect(x: 0, y: 0, width: raw.width, height: raw.height - trim)) ?? raw) : raw
-        return await Task.detached(priority: .userInitiated) { ImageStitcher.makeFrame(img) }.value
-    }
-
     private func dump(_ image: CGImage) {
         dumpIndex += 1
         let url = dumpDir.appendingPathComponent(String(format: "frame-%02d.png", dumpIndex))
         Task.detached(priority: .background) {
             if let data = Exporter.pngData(image) { try? data.write(to: url) }
         }
+    }
+
+    /// 停止捕获（保留 stream 对象以便之后在其队列上合成结果）
+    private func stopStream() {
+        autoTimer?.invalidate()
+        autoTimer = nil
+        stream?.stop()
     }
 
     /// 向区域中心发送向下滚动的滚轮事件（连续像素滚动，应用按精确像素量滚动、不做动画）
@@ -180,9 +250,13 @@ final class LongScreenshotSession {
     private func finish() {
         guard running else { return }
         running = false
+        stopStream()
         panel.orderOut(nil)
         LongScreenshotSession.current = nil
-        guard let image = stitcher.compose() else { fail("没有拼接出内容"); return }
+        var composed: CGImage?
+        streamQueueSync { composed = stitcher.compose() }
+        stream = nil
+        guard let image = composed else { fail("没有拼接出内容"); return }
         if let debugOutputURL, let data = Exporter.pngData(image) { try? data.write(to: debugOutputURL) }
         if let data = Exporter.pngData(image) { try? data.write(to: dumpDir.appendingPathComponent("result.png")) }
         onFinish?(image)
@@ -190,13 +264,16 @@ final class LongScreenshotSession {
         let win = ImageEditorWindow(image: image, scale: screen.backingScaleFactor, screen: screen, title: "长截图")
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        Log.info("longshot done: \(image.width)x\(image.height), frames=\(frames)")
+        var stats = ""
+        streamQueueSync { stats = String(format: "avg %.1fms over %d frames, sources %@", self.procTotal / Double(max(1, self.procCount)) * 1000, self.procCount, self.sourceCounts.description) }
+        Log.info("longshot done: \(image.width)x\(image.height), frames=\(frames), \(stats)")
     }
 
     func debugFinish() { finish() }
 
     private func cancel() {
         running = false
+        stopStream()
         panel.orderOut(nil)
         LongScreenshotSession.current = nil
         Log.info("longshot cancelled")
@@ -204,6 +281,7 @@ final class LongScreenshotSession {
 
     private func fail(_ message: String) {
         running = false
+        stopStream()
         panel.orderOut(nil)
         LongScreenshotSession.current = nil
         let alert = NSAlert()

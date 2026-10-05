@@ -41,7 +41,12 @@ enum StitchTest {
             if i > 0 { offset = min(total - inner, offset + s) }
             guard let content = tall.cropping(to: CGRect(x: 0, y: offset, width: w, height: inner)),
                   let frame = stack([header, content, footer]) else { continue }
-            switch stitcher.push(frame, expectedShift: 170) {
+            let o = stitcher.push(frame, expectedShift: 170)
+            let dd = stitcher.lastDiagnostics
+            if case .appended(let r) = o, i > 0, r != (i == 4 ? 110 : i == 8 ? 200 : 170) {
+                print("  fixed-bars frame \(i): got \(r) rough \(String(format: "%.2f", dd.rough)) src \(dd.reason) header \(dd.header) footer \(dd.footer)")
+            }
+            switch o {
             case .appended(let r): outcomes.append("+\(r)")
             case .unchanged: outcomes.append("=")
             case .scrolledUp: outcomes.append("^")
