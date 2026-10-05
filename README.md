@@ -108,6 +108,8 @@
 
 > 如果其他应用占用了某个全局快捷键，注册会失败（偏好设置里会提示），可以在偏好设置里换一个组合。
 
+> 菜单栏图标动画：悬停时准星转一圈；截图完成（复制 / 保存）时像快门一样“咔嚓”一下；长截图进行中四角呼吸、准星慢转；录屏中中间变为闪烁的圆点。系统开启“减少动态效果”时只保留静态状态。
+
 ## 调试参数
 
 ```bash
@@ -122,6 +124,7 @@ open build/KShot.app --args --shoot --demo --selftest --translate-test   # 最�
 open build/KShot.app --args --longshot-demo      # 弹一个可滚动的示例窗口并对它跑完整长截图流程（自动滚动），结果存到 ~/Library/Logs/KShot-selftest/longshot.png
 open build/KShot.app --args --longshot-demo --manual   # 同上，但由示例窗口模拟人手滚动（步长不一、会往回滚），验证手动模式
 open build/KShot.app --args --stitch-test        # 用合成长图验证拼接算法的像素精度
+open build/KShot.app --args --icon-demo          # 放慢 6 倍依次播放菜单栏图标的各段动画
 open build/KShot.app --args --redact-test        # 合成含敏感信息与二维码的图片，验证自动打码与二维码识别
 open build/KShot.app --args --beautify-test      # 美化：输出渐变 / 透明背景两种结果与窗口截图
 open build/KShot.app --args --editor-test        # 图片编辑窗口：新工具、选中拖动、撤销重做

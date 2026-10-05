@@ -5,6 +5,7 @@ import ServiceManagement
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
+    private var iconAnimator: MenuBarAnimator?
     private var hotKey: HotKey?
     private var launchAtLoginItem: NSMenuItem!
 
@@ -20,6 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 首次启动时主动触发一次权限检查，避免第一次截图时才弹窗
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--icon-sheet"), i + 1 < CommandLine.arguments.count {
+            MenuBarAnimator.renderSheet(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+            NSApp.terminate(nil)
+            return
         }
         if CommandLine.arguments.contains("--vision-probe") {
             StitchProbe.run()
@@ -75,7 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = MenuBarIcon.make()
+            iconAnimator = MenuBarAnimator(button: button)
+            if CommandLine.arguments.contains("--icon-demo") { iconAnimator?.runDemo() }
             button.toolTip = "KShot 截图  \(Settings.captureHotKey.display)"
         }
 

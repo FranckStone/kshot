@@ -62,6 +62,7 @@ enum Exporter {
     }
 
     static func copyToClipboard(_ image: CGImage) {
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("KShotCaptureFinished"), object: nil) }
         let pb = NSPasteboard.general
         pb.clearContents()
         var items: [NSPasteboardWriting] = []
@@ -130,6 +131,7 @@ enum Exporter {
             do {
                 try data.write(to: url)
                 UserDefaults.standard.set(url.deletingLastPathComponent(), forKey: "lastSaveDirectory")
+                NotificationCenter.default.post(name: Notification.Name("KShotCaptureFinished"), object: nil)
                 completion(true)
             } catch {
                 NSLog("保存失败: \(error)")
