@@ -131,8 +131,18 @@ final class RingView: NSView {
 /// 玻璃边框：一整块圆角玻璃，用遮罩抠掉中间，只留下一圈环
 final class GlassFrameView: NSView {
     static let thickness: CGFloat = 4
-    /// 外侧圆角半径（整屏时取屏幕角的弧度，窗口时取窗口圆角）
-    var cornerRadius: CGFloat = 0 { didSet { needsLayout = true } }
+
+    /// 四个角各自的外侧圆角（视图坐标，左上原点）
+    struct Corners: Equatable {
+        var topLeft: CGFloat, topRight: CGFloat, bottomLeft: CGFloat, bottomRight: CGFloat
+        static func all(_ r: CGFloat) -> Corners { Corners(topLeft: r, topRight: r, bottomLeft: r, bottomRight: r) }
+    }
+    var corners = Corners.all(0) { didSet { if corners != oldValue { needsLayout = true } } }
+    /// 兼容旧接口：统一圆角
+    var cornerRadius: CGFloat {
+        get { corners.topLeft }
+        set { corners = .all(newValue) }
+    }
 
     private let glass: NSView
     private let maskLayer = CAShapeLayer()
@@ -155,17 +165,42 @@ final class GlassFrameView: NSView {
         let t = GlassFrameView.thickness
         let b = bounds
         glass.frame = b
-        let outerR = max(cornerRadius, t)
-        if #available(macOS 26.0, *), let g = glass as? NSGlassEffectView { g.cornerRadius = outerR }
-        else { glass.layer?.cornerRadius = outerR }
-        // 环形遮罩：外圆角矩形 - 内圆角矩形
+        // 形状完全由遮罩决定，玻璃本身不做圆角
+        if #available(macOS 26.0, *), let g = glass as? NSGlassEffectView { g.cornerRadius = 0 }
+        else { glass.layer?.cornerRadius = 0 }
+        // 环形遮罩：外轮廓 - 内轮廓（内轮廓圆角 = 外圆角 - 框宽）
         let path = CGMutablePath()
-        path.addRoundedRect(in: b, cornerWidth: outerR, cornerHeight: outerR)
-        let inner = b.insetBy(dx: t, dy: t)
-        let innerR = max(0, outerR - t)
-        path.addRoundedRect(in: inner, cornerWidth: innerR, cornerHeight: innerR)
+        path.addPath(Self.roundedPath(b, corners, flipped: isLayerFlipped))
+        let innerCorners = Corners(topLeft: max(0, corners.topLeft - t), topRight: max(0, corners.topRight - t),
+                                   bottomLeft: max(0, corners.bottomLeft - t), bottomRight: max(0, corners.bottomRight - t))
+        path.addPath(Self.roundedPath(b.insetBy(dx: t, dy: t), innerCorners, flipped: isLayerFlipped))
         maskLayer.frame = b
         maskLayer.path = path
+    }
+
+    /// 遮罩层坐标是否与视图一样左上原点
+    private var isLayerFlipped: Bool { layer?.contentsAreFlipped() ?? true }
+
+    /// 四角分别圆角的矩形路径。flipped=true 时 minY 是视图顶部
+    static func roundedPath(_ r: CGRect, _ c: Corners, flipped: Bool) -> CGPath {
+        let maxR = min(r.width, r.height) / 2
+        let tl = min(c.topLeft, maxR), tr = min(c.topRight, maxR), bl = min(c.bottomLeft, maxR), br = min(c.bottomRight, maxR)
+        // 统一换算到“上边 = topY、下边 = botY”
+        let topY = flipped ? r.minY : r.maxY
+        let botY = flipped ? r.maxY : r.minY
+        let dir: CGFloat = flipped ? 1 : -1   // 从上往下走的 y 方向
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: r.minX + tl, y: topY))
+        p.addLine(to: CGPoint(x: r.maxX - tr, y: topY))
+        p.addArc(tangent1End: CGPoint(x: r.maxX, y: topY), tangent2End: CGPoint(x: r.maxX, y: topY + dir * tr), radius: tr)
+        p.addLine(to: CGPoint(x: r.maxX, y: botY - dir * br))
+        p.addArc(tangent1End: CGPoint(x: r.maxX, y: botY), tangent2End: CGPoint(x: r.maxX - br, y: botY), radius: br)
+        p.addLine(to: CGPoint(x: r.minX + bl, y: botY))
+        p.addArc(tangent1End: CGPoint(x: r.minX, y: botY), tangent2End: CGPoint(x: r.minX, y: botY - dir * bl), radius: bl)
+        p.addLine(to: CGPoint(x: r.minX, y: topY + dir * tl))
+        p.addArc(tangent1End: CGPoint(x: r.minX, y: topY), tangent2End: CGPoint(x: r.minX + tl, y: topY), radius: tl)
+        p.closeSubpath()
+        return p
     }
 
     /// 纯装饰，鼠标事件穿透到遮罩层（否则会吞掉点击，导致无法选区）

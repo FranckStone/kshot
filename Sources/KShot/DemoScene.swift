@@ -27,7 +27,14 @@ enum DemoScene {
         CGRect(x: 0, y: 0, width: size.width, height: 25).fill()
 
         // 示例窗口
-        let win = CGRect(x: size.width * 0.22, y: size.height * 0.18, width: size.width * 0.56, height: size.height * 0.62)
+        var win = CGRect(x: size.width * 0.22, y: size.height * 0.18, width: size.width * 0.56, height: size.height * 0.62)
+        let notch = screen.safeAreaInsets.top
+        if CommandLine.arguments.contains("--demo-fullscreen") {
+            // 全屏应用：刘海屏上窗口在刘海下方，铺满剩余区域
+            win = CGRect(x: 0, y: notch, width: size.width, height: size.height - notch)
+        } else if CommandLine.arguments.contains("--demo-tile-left") {
+            win = CGRect(x: 0, y: 25, width: size.width * 0.56, height: size.height - 25) // 略宽于一半，让测试鼠标（屏幕中心）落在窗口里
+        }
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: 12), blur: 40, color: NSColor.black.withAlphaComponent(0.35).cgColor)
         NSColor(hex: 0xF5F5F7).setFill()

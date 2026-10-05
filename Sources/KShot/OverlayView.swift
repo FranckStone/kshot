@@ -215,17 +215,34 @@ final class OverlayView: NSView {
             hoverFrame.isHidden = true
             return
         }
-        let t = GlassFrameView.thickness
-        let isFullScreen = self.isFullScreen(rect)
-        // 整屏时玻璃框贴在屏幕边缘内侧，并用屏幕角的弧度；窗口时略大于窗口圆角
-        let f = isFullScreen ? bounds : rect.insetBy(dx: -t, dy: -t)
-        let radius: CGFloat = isFullScreen ? screen.physicalCornerRadius : OverlayView.windowCornerRadius + t
-        if hoverFrame.frame != f || hoverFrame.cornerRadius != radius {
+        let (f, corners) = glassFrameGeometry(for: rect)
+        if hoverFrame.frame != f || hoverFrame.corners != corners {
             hoverFrame.frame = f
-            hoverFrame.cornerRadius = radius
+            hoverFrame.corners = corners
             hoverFrame.needsLayout = true
         }
         hoverFrame.isHidden = false
+    }
+
+    /// 玻璃框的位置与四角圆角：
+    /// 框画在窗口外侧一圈；窗口贴着屏幕边缘（全屏应用、左右分屏）时，贴边的那几条边收进屏幕内侧。
+    /// 四个角：落在屏幕角上 → 屏幕物理圆角；只有一条边贴屏幕边 → 直角；不贴边 → 窗口圆角。
+    private func glassFrameGeometry(for rect: CGRect) -> (CGRect, GlassFrameView.Corners) {
+        let t = GlassFrameView.thickness
+        let edge: CGFloat = 2
+        let atL = rect.minX - bounds.minX <= edge, atR = bounds.maxX - rect.maxX <= edge
+        let atT = rect.minY - bounds.minY <= edge, atB = bounds.maxY - rect.maxY <= edge
+        var f = rect.insetBy(dx: -t, dy: -t)
+        if atL { f.origin.x = bounds.minX; f.size.width = rect.maxX + t - bounds.minX }
+        if atR { f.size.width = bounds.maxX - f.minX }
+        if atT { f.size.height = f.maxY - bounds.minY; f.origin.y = bounds.minY }
+        if atB { f.size.height = bounds.maxY - f.minY }
+        f = f.intersection(bounds)
+        let screenR = screen.physicalCornerRadius
+        let winR = OverlayView.windowCornerRadius + t
+        func corner(_ a: Bool, _ b: Bool) -> CGFloat { a && b ? screenR : (a || b ? 0 : winR) }
+        return (f, GlassFrameView.Corners(topLeft: corner(atT, atL), topRight: corner(atT, atR),
+                                          bottomLeft: corner(atB, atL), bottomRight: corner(atB, atR)))
     }
 
     /// 选区（或悬停区域）是否基本等于整块屏幕
