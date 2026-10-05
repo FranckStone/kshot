@@ -32,22 +32,45 @@ final class ImageStitcher: @unchecked Sendable {
     /// findShift 失败时的细节（调试）
     private static var lastFailure = Diagnostics()
 
-    private(set) var strips: [CGImage] = []
-    private(set) var totalHeight = 0
     private(set) var lastDiagnostics = Diagnostics()
-    /// 锚点：最后一次拼接进去的帧，新帧都和它比
-    private var previous: Frame?
-    private var footerStrip: CGImage?
-    /// 上一次拼入的滚动量：手动模式下用作下一帧的预期值（滚动速度连续）
-    private var lastShift = 0
     private let maxTotalHeight: Int
     private static let sampleColumns = 64
+    private let estimator = VisionOffsetEstimator()
+
+    // MARK: - 画布模型
+    // 每一帧按位移放到一张纵向画布上（canvas 行号 = 帧在画布上的位置 + 帧内行号），向下、向上滚动都只会补充内容。
+    // 新露出的行要等滚到视野中部（提交线）才写入画布：取自画面中部的像素，避开底部悬浮按钮这类覆盖层。
+
+    /// 锚点：最后一次成功匹配的帧
+    private var anchor: Frame?
+    private var anchorY = 0
+    /// 固定顶栏 / 底栏（一旦识别就保持，取历次最大值）
+    private var stickyTop = 0
+    private var stickyFooter = 0
+    /// 已写入画布的范围 [committedMin, committedMax)
+    private var committedMin: Int?
+    private var committedMax = 0
+    private var downStrips: [CGImage] = []   // 覆盖 [base, committedMax)，按顺序
+    private var upStrips: [CGImage] = []     // 覆盖 [committedMin, base)，越靠后越靠上
+    private var lastShift = 0
+
+    /// 向下滚动时，帧内这一比例以上的行才写入（越大越靠下）
+    private let commitDownRatio = 0.6
+    /// 向上滚动时，帧内这一比例以下的行才写入
+    private let commitUpRatio = 0.35
 
     init(maxTotalHeight: Int = 30000) {
         self.maxTotalHeight = maxTotalHeight
     }
 
-    var width: Int { strips.first?.width ?? 0 }
+    var width: Int { anchor?.width ?? 0 }
+
+    /// 当前已拼接高度（含固定栏）
+    var totalHeight: Int {
+        guard let a = anchor else { return 0 }
+        guard let cMin = committedMin else { return a.height }
+        return (committedMax - cMin) + stickyTop + stickyFooter
+    }
 
     func push(_ image: CGImage, expectedShift: Int = 0) -> Outcome {
         guard let frame = Self.makeFrame(image) else { return .noMatch }
@@ -59,125 +82,161 @@ final class ImageStitcher: @unchecked Sendable {
         a.width == b.width && a.height == b.height && meanDiff(a.rows, b.rows, aStart: 0, bStart: 0, count: a.height, step: 3) < 1.5
     }
 
-    private let estimator = VisionOffsetEstimator()
-    /// 往回滚需要连续两帧确认（移植自 ScrollSnap）
-    private var pendingReverse = false
-    /// 位移小于这个值视为没动（px）
-    private let deadZone = 4
-
-    /// 喂入一帧：用 Vision 横带一致性配准求位移，行签名精修到整像素。
-    /// expectedShift 仅为兼容旧调用保留。
+    /// 喂入一帧。expectedShift 仅为兼容旧调用保留。
     func push(frame: Frame, expectedShift: Int = 0) -> Outcome {
-        let image = frame.image
-        guard let prev = previous else {
-            previous = frame
-            strips = [image]
-            totalHeight = image.height
-            return .appended(rows: image.height)
+        guard let prev = anchor else {
+            anchor = frame
+            anchorY = 0
+            return .appended(rows: frame.height)
         }
         guard prev.width == frame.width, prev.height == frame.height else { return .noMatch }
         if Self.isSame(prev, frame) { return .unchanged }
 
-        // footer/header：用于裁剪底栏（截到最后一个有纹理行）；matchTop/matchBottom：用于匹配（包含所有静止行）
+        let h = frame.height
         let footerRuns = Self.staticRuns(prev, frame, fromTop: false)
         let headerRuns = Self.staticRuns(prev, frame, fromTop: true)
-        let footer = footerRuns.textured, header = headerRuns.textured
-        let matchTop = headerRuns.full, matchBottom = frame.height - footerRuns.full
-        // 位移：半分辨率 Vision → 全分辨率 Vision → 行签名搜索（仅向下）
-        let shift: Int
-        var source: String
+        let matchTop = max(stickyTop, headerRuns.full)
+        let matchBottom = h - max(stickyFooter, footerRuns.full)
+        guard matchBottom - matchTop > 48 else { return .noMatch }
+
+        // 1. 位移：半分辨率 Vision → 全分辨率 Vision → 行签名搜索（仅向下）
+        var shift: Int?
+        var source = ""
         var roughDy = 0.0
-        var confidence: Float = 0
-        // 只在滚动区域（去掉固定顶栏/底栏）上配准
         let band = CGRect(x: 0, y: matchTop, width: frame.width, height: matchBottom - matchTop)
-        let curBand = band.height >= 64 ? (image.cropping(to: band) ?? image) : image
-        let prevBand = band.height >= 64 ? (prev.image.cropping(to: band) ?? prev.image) : prev.image
-        if let est = estimator.estimateFast(current: curBand, previous: prevBand) ?? estimator.estimate(current: curBand, previous: prevBand) {
+        if let cur = frame.image.cropping(to: band), let pre = prev.image.cropping(to: band),
+           let est = estimator.estimateFast(current: cur, previous: pre) ?? estimator.estimate(current: cur, previous: pre) {
             shift = Self.refine(prev: prev, next: frame, around: Int(est.dy.rounded()), top: matchTop, bottom: matchBottom)
             source = est.source
             roughDy = Double(est.dy)
-            confidence = est.confidence
-        } else if matchBottom - matchTop > 24,
-                  let (s, _) = Self.findShift(prev: prev, next: frame, top: matchTop, bottom: matchBottom, expected: lastShift) {
-            shift = s
-            source = "rows"
         } else {
-            lastDiagnostics = Diagnostics(header: header, footer: footer, reason: "none")
-            pendingReverse = false
-            return .noMatch
-        }
-        lastDiagnostics = Diagnostics(shift: shift, score: Double(confidence), header: header, footer: footer, reason: source, rough: roughDy)
-
-        if abs(shift) < deadZone {
-            pendingReverse = false
-            return .unchanged
-        }
-        if shift < 0 {
-            // 往回滚：第一次只记下，第二次确认后从底部裁掉
-            guard pendingReverse else { pendingReverse = true; return .scrolledUp }
-            pendingReverse = false
-            removeBottom(-shift)
-            previous = frame
-            return .scrolledUp
-        }
-        pendingReverse = false
-        guard totalHeight + shift <= maxTotalHeight else { return .unchanged }
-
-        // 固定底栏：首次发现时从第一条带里裁掉，之后每次只记最新的，合成时补一次
-        let h = frame.height
-        if footer > 0 {
-            if footerStrip == nil, strips.count == 1, let first = strips.first, first.height > footer,
-               let trimmed = first.cropping(to: CGRect(x: 0, y: 0, width: first.width, height: first.height - footer)) {
-                strips[0] = trimmed
-                totalHeight -= footer
+            // 行签名搜索：向下、向上各试一次，取重叠区更吻合的
+            let down = Self.findShift(prev: prev, next: frame, top: matchTop, bottom: matchBottom, expected: max(0, lastShift))
+            let up = Self.findShift(prev: frame, next: prev, top: matchTop, bottom: matchBottom, expected: max(0, -lastShift))
+            switch (down, up) {
+            case let (d?, u?): shift = d.1 <= u.1 ? d.0 : -u.0
+            case let (d?, nil): shift = d.0
+            case let (nil, u?): shift = -u.0
+            default: break
             }
-            footerStrip = image.cropping(to: CGRect(x: 0, y: h - footer, width: image.width, height: footer))
+            source = "rows"
         }
-        let bandBottom = h - footer
-        let take = min(shift, bandBottom)
-        guard take > 0, let strip = image.cropping(to: CGRect(x: 0, y: bandBottom - take, width: image.width, height: take)) else {
+        guard let s = shift else {
+            lastDiagnostics = Diagnostics(reason: "none")
             return .noMatch
         }
-        strips.append(strip)
-        totalHeight += take
-        previous = frame
-        lastShift = shift
-        return .appended(rows: take)
+
+        // 2. 校验：重叠区必须真的吻合，且有足够的纹理（空白对空白无法确定位移）
+        let v = Self.verify(prev: prev, next: frame, shift: s, top: matchTop, bottom: matchBottom)
+        lastDiagnostics = Diagnostics(shift: s, score: v.diff, header: headerRuns.textured, footer: footerRuns.textured,
+                                      halves: v.halves, reason: v.ok ? source : "verify(\(source))", rough: roughDy)
+        guard v.ok else { return .noMatch }
+        if s == 0 { return .unchanged }
+
+        // 3. 固定栏：取历次最大值（只看有纹理的部分，紧挨着的空白行归内容）
+        stickyTop = max(stickyTop, headerRuns.textured)
+        stickyFooter = max(stickyFooter, footerRuns.textured)
+        let top = stickyTop, bottom = h - stickyFooter
+        let frameY = anchorY + s
+
+        // 4. 首次移动：把锚点帧中部以上的内容作为起点写入
+        if committedMin == nil {
+            let lineDown = top + Int(Double(bottom - top) * commitDownRatio)
+            let lineUp = top + Int(Double(bottom - top) * commitUpRatio)
+            let first = s > 0 ? (top, lineDown) : (lineUp, bottom)
+            if let img = prev.image.cropping(to: CGRect(x: 0, y: first.0, width: prev.width, height: first.1 - first.0)) {
+                downStrips = [img]
+                committedMin = anchorY + first.0
+                committedMax = anchorY + first.1
+            }
+        }
+        let before = totalHeight
+
+        // 掉头（≥12px）：上一个方向上还没过提交线的行以后不会再经过提交线了，用掉头那一帧补上
+        if lastShift != 0, (lastShift > 0) != (s > 0), abs(s) >= 12 {
+            if lastShift > 0 {
+                commitDown(from: prev, frameY: anchorY, endRow: bottom, top: top)
+            } else {
+                commitUp(from: prev, frameY: anchorY, startRow: top, bottom: bottom)
+            }
+        }
+
+        if s > 0 {
+            // 先用锚点补上滚得太快时跳过的行（它们只在锚点的下半部出现过）
+            if committedMax < frameY + top {
+                commitDown(from: prev, frameY: anchorY, endRow: min(bottom, frameY + top - anchorY), top: top)
+            }
+            let line = top + Int(Double(bottom - top) * commitDownRatio)
+            if frameY + line > committedMax { commitDown(from: frame, frameY: frameY, endRow: line, top: top) }
+        } else {
+            if let cMin = committedMin, cMin > frameY + bottom {
+                commitUp(from: prev, frameY: anchorY, startRow: max(top, frameY + bottom - anchorY), bottom: bottom)
+            }
+            let line = top + Int(Double(bottom - top) * commitUpRatio)
+            if let cMin = committedMin, frameY + line < cMin { commitUp(from: frame, frameY: frameY, startRow: line, bottom: bottom) }
+        }
+
+        anchor = frame
+        anchorY = frameY
+        lastShift = s
+        return .appended(rows: max(0, totalHeight - before))
     }
 
-    /// 从拼接结果底部移除 n 行（往回滚时用）
-    private func removeBottom(_ n: Int) {
-        var remaining = n
-        while remaining > 0, strips.count > 1, let last = strips.last {
-            if last.height <= remaining {
-                strips.removeLast()
-                totalHeight -= last.height
-                remaining -= last.height
-            } else {
-                if let cut = last.cropping(to: CGRect(x: 0, y: 0, width: last.width, height: last.height - remaining)) {
-                    strips[strips.count - 1] = cut
-                    totalHeight -= remaining
-                }
-                remaining = 0
-            }
-        }
+    /// 把 frame 中 [committedMax - frameY, endRow) 行接到画布底部
+    private func commitDown(from f: Frame, frameY: Int, endRow: Int, top: Int) {
+        let startRow = max(top, committedMax - frameY)
+        guard endRow > startRow, totalHeight + (endRow - startRow) <= maxTotalHeight,
+              let img = f.image.cropping(to: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
+        downStrips.append(img)
+        committedMax = frameY + endRow
+    }
+
+    /// 把 frame 中 [startRow, committedMin - frameY) 行接到画布顶部
+    private func commitUp(from f: Frame, frameY: Int, startRow: Int, bottom: Int) {
+        guard let cMin = committedMin else { return }
+        let endRow = min(bottom, cMin - frameY)
+        guard endRow > startRow, totalHeight + (endRow - startRow) <= maxTotalHeight,
+              let img = f.image.cropping(to: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
+        upStrips.append(img)
+        committedMin = frameY + startRow
+    }
+
+    /// 结束时把锚点帧里还没写入的上下两端补上
+    func flush() {
+        guard let a = anchor, committedMin != nil else { return }
+        let top = stickyTop, bottom = a.height - stickyFooter
+        commitDown(from: a, frameY: anchorY, endRow: bottom, top: top)
+        commitUp(from: a, frameY: anchorY, startRow: top, bottom: bottom)
+    }
+
+    /// 重叠区校验：整体差异、上下两半差异、纹理行数
+    private static func verify(prev: Frame, next: Frame, shift s: Int, top: Int, bottom: Int) -> (ok: Bool, diff: Double, halves: (Double, Double)) {
+        let overlap = (bottom - top) - abs(s)
+        guard overlap >= 32 else { return (false, .infinity, (0, 0)) }
+        let aStart = s >= 0 ? top + s : top
+        let bStart = s >= 0 ? top : top - s
+        var textured = 0
+        for i in 0..<overlap where next.textured[bStart + i] { textured += 1 }
+        let half = overlap / 2
+        let d = meanDiff(prev.rows, next.rows, aStart: aStart, bStart: bStart, count: overlap, step: 1)
+        let h1 = meanDiff(prev.rows, next.rows, aStart: aStart, bStart: bStart, count: half, step: 1)
+        let h2 = meanDiff(prev.rows, next.rows, aStart: aStart + half, bStart: bStart + half, count: overlap - half, step: 1)
+        let ok = textured >= 8 && d < 4 && h1 < 6 && h2 < 6
+        return (ok, d, (h1, h2))
     }
 
     /// 在 Vision 的粗略位移附近 ±8px 用行签名找最吻合的整像素位移
     private static func refine(prev: Frame, next: Frame, around rough: Int, top: Int, bottom: Int) -> Int {
         let h = bottom - top
         var best = rough, bestScore = Double.infinity
-        // 半分辨率 ×2 与横带平均最多带来约 ±8px 误差
         for s in (rough - 8)...(rough + 8) {
             let overlap = h - abs(s)
             guard overlap > 24 else { continue }
-            // 两端各跳过 10%，避开紧挨固定栏、没被识别进去的过渡行
             let skip = overlap / 10
             let n = overlap - skip * 2
             let sc = s >= 0
                 ? meanDiff(prev.rows, next.rows, aStart: top + s + skip, bStart: top + skip, count: n, step: 1)
                 : meanDiff(prev.rows, next.rows, aStart: top + skip, bStart: top - s + skip, count: n, step: 1)
-            // 得分几乎相同（空白区）时取最接近 Vision 估计的
             if sc < bestScore - 0.05 || (abs(sc - bestScore) <= 0.05 && abs(s - rough) < abs(best - rough)) {
                 bestScore = min(sc, bestScore); best = s
             }
@@ -185,22 +244,35 @@ final class ImageStitcher: @unchecked Sendable {
         return best
     }
 
-    /// 预览：最后若干条带（至少 minHeight 像素）竖向合成
+    /// 预览：画布底部若干像素 + 锚点帧里还没写入的部分
     func preview(minHeight: Int) -> CGImage? {
+        guard let a = anchor else { return nil }
+        guard committedMin != nil else { return a.image }
         var picked: [CGImage] = []
-        var h = 0
-        for s in strips.reversed() {
+        let pendingStart = max(stickyTop, committedMax - anchorY)
+        let pendingEnd = a.height - stickyFooter
+        if pendingEnd > pendingStart, let p = a.image.cropping(to: CGRect(x: 0, y: pendingStart, width: a.width, height: pendingEnd - pendingStart)) {
+            picked.append(p)
+        }
+        var hgt = picked.first?.height ?? 0
+        for s in downStrips.reversed() {
             picked.insert(s, at: 0)
-            h += s.height
-            if h >= minHeight { break }
+            hgt += s.height
+            if hgt >= minHeight { break }
         }
         return Self.stack(picked)
     }
 
-    /// 把所有条带竖向合成一张图（末尾补上固定底栏）
+    /// 合成整张图：顶栏 + 画布 + 底栏
     func compose() -> CGImage? {
-        var all = strips
-        if let footerStrip { all.append(footerStrip) }
+        guard let a = anchor else { return nil }
+        guard committedMin != nil else { return a.image }
+        flush()
+        var all: [CGImage] = []
+        if stickyTop > 0, let hdr = a.image.cropping(to: CGRect(x: 0, y: 0, width: a.width, height: stickyTop)) { all.append(hdr) }
+        all.append(contentsOf: upStrips.reversed())
+        all.append(contentsOf: downStrips)
+        if stickyFooter > 0, let ftr = a.image.cropping(to: CGRect(x: 0, y: a.height - stickyFooter, width: a.width, height: stickyFooter)) { all.append(ftr) }
         return Self.stack(all)
     }
 

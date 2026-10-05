@@ -56,7 +56,71 @@ enum StitchTest {
         guard let result = stitcher.compose(), let expectedImg = stack([header, tall, footer]) else { return }
         let diff = pixelDiff(result, expectedImg)
         let d = stitcher.lastDiagnostics
+        defer { runRobustness() }
         print("stitch-test fixed-bars: \(result.width)x\(result.height) / \(w)x\(total + headerH + footerH) diff=\(String(format: "%.3f", diff)) header=\(d.header) footer=\(d.footer) \(outcomes.joined(separator: " "))")
+    }
+
+    /// 新增场景：混入无关帧、先上后下、底部悬浮按钮
+    static func runRobustness() {
+        let w = 800, viewport = 500, total = 3200
+        guard let tall = makeTallImage(width: w, height: total), let other = makeTallImage(width: w, height: viewport) else { return }
+        func crop(_ y: Int) -> CGImage { tall.cropping(to: CGRect(x: 0, y: y, width: w, height: viewport))! }
+        func run(_ name: String, _ frames: [CGImage], expected: CGImage) {
+            let st = ImageStitcher()
+            var out: [String] = []
+            for (i, f) in frames.enumerated() {
+                let o = st.push(f)
+                if case .noMatch = o {
+                    let d = st.lastDiagnostics
+                    print("   \(name) frame \(i): x shift=\(d.shift) rough=\(String(format: "%.1f", d.rough)) diff=\(String(format: "%.2f", d.score)) halves=\(String(format: "%.2f/%.2f", d.halves.0, d.halves.1)) src=\(d.reason)")
+                }
+                switch o {
+                case .appended(let r): out.append("+\(r)")
+                case .unchanged: out.append("=")
+                case .scrolledUp: out.append("^")
+                case .noMatch: out.append("x")
+                }
+            }
+            guard let r = st.compose() else { print("stitch-test \(name): compose 失败"); return }
+            print("stitch-test \(name): \(r.width)x\(r.height) / \(expected.width)x\(expected.height) diff=\(String(format: "%.3f", pixelDiff(r, expected))) \(out.joined(separator: " "))")
+        }
+
+        // 1. 中途混入一帧完全无关的画面
+        var jump: [CGImage] = []
+        var y = 0
+        while y < total - viewport { jump.append(crop(y)); if jump.count == 5 { jump.append(other) }; y += 180 }
+        jump.append(crop(total - viewport))
+        run("jump", jump, expected: tall)
+
+        // 2. 从中间开始，先往上滚到顶，再往下滚到底
+        var updown: [CGImage] = []
+        y = 1500
+        while y > 0 { updown.append(crop(y)); y -= 170 }
+        updown.append(crop(0))
+        y = 0
+        while y < total - viewport { y = min(total - viewport, y + 190); updown.append(crop(y)) }
+        run("updown", updown, expected: tall)
+
+        // 3. 视口底部有一个固定的悬浮按钮：结果里只应出现在最后一屏的位置
+        func withButton(_ img: CGImage) -> CGImage {
+            let ctx = CGContext(data: nil, width: img.width, height: img.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height))
+            ctx.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1))
+            ctx.fillEllipse(in: CGRect(x: img.width / 2 - 20, y: 30, width: 40, height: 40)) // 左下原点：距底 30px
+            return ctx.makeImage()!
+        }
+        var overlay: [CGImage] = []
+        y = 0
+        while y < total - viewport { overlay.append(withButton(crop(y))); y += 150 }
+        overlay.append(withButton(crop(total - viewport)))
+        // 期望：原图，只在最后一屏的位置画一次按钮
+        let ctx = CGContext(data: nil, width: w, height: total, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(tall, in: CGRect(x: 0, y: 0, width: w, height: total))
+        ctx.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1))
+        ctx.fillEllipse(in: CGRect(x: w / 2 - 20, y: 30, width: 40, height: 40))
+        run("overlay", overlay, expected: ctx.makeImage()!)
     }
 
     /// 有纹理的横条（模拟固定的工具栏/输入框）
