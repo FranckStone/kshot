@@ -39,6 +39,7 @@ final class ImageStitcher: @unchecked Sendable {
     private let maxTotalHeight: Int
     private static let sampleColumns = 64
     private let estimator = VisionOffsetEstimator()
+    private let useVision: Bool
 
     // MARK: - 画布模型
     // 每一帧按位移放到一张纵向画布上（canvas 行号 = 帧在画布上的位置 + 帧内行号），向下、向上滚动都只会补充内容。
@@ -48,6 +49,8 @@ final class ImageStitcher: @unchecked Sendable {
     private var anchor: Frame?
     private var anchorY = 0
     private var failStreak = 0
+    private var lastRejected: Frame?
+    private(set) var matchingAttempts = 0
     /// 固定栏候选：同一高度（±2px）连续出现的次数，达到 3 次才认定
     private var headerCandidate = (h: 0, n: 0)
     private var footerCandidate = (h: 0, n: 0)
@@ -56,7 +59,7 @@ final class ImageStitcher: @unchecked Sendable {
     private var bottomEdgeFrameRow = 0
     /// 关键帧：已放到画布上的帧（间隔约 1/3 屏），接不上当前锚点时用来找回位置
     private var keyframes: [(frame: Frame, y: Int)] = []
-    private let maxKeyframes = 40
+    private let maxKeyframes = 12
     /// 固定顶栏 / 底栏（一旦识别就保持，取历次最大值）
     private var stickyTop = 0
     private var stickyFooter = 0
@@ -72,20 +75,33 @@ final class ImageStitcher: @unchecked Sendable {
     /// 向上滚动时，帧内这一比例以下的行才写入
     private let commitUpRatio = 0.35
 
-    init(maxTotalHeight: Int = 30000) {
+    init(maxTotalHeight: Int = 30000, useVision: Bool = true) {
         self.maxTotalHeight = maxTotalHeight
+        self.useVision = useVision
     }
 
     var width: Int { anchor?.width ?? 0 }
 
     /// 调试：当前锚点在画布上的位置与已提交范围
     var debugState: String { "anchorY=\(anchorY) committed=[\(committedMin.map(String.init) ?? "nil"),\(committedMax)) top=\(stickyTop) footer=\(stickyFooter)" }
+    var debugStripStorageBytes: Int {
+        (upStrips + downStrips).reduce(0) { $0 + ($1.dataProvider?.data.map { CFDataGetLength($0) } ?? 0) }
+    }
 
     /// 当前已拼接高度（含固定栏）
     var totalHeight: Int {
         guard let a = anchor else { return 0 }
         guard let cMin = committedMin else { return a.height }
         return (committedMax - cMin) + stickyTop + stickyFooter
+    }
+
+    /// 实时结果包含最新帧尚未经过提交线的上下边缘。
+    var previewHeight: Int {
+        guard let a = anchor else { return 0 }
+        guard let cMin = committedMin else { return a.height }
+        let top = min(cMin, anchorY + stickyTop)
+        let bottom = max(committedMax, anchorY + a.height - stickyFooter)
+        return bottom - top + stickyTop + stickyFooter
     }
 
     func push(_ image: CGImage, expectedShift: Int = 0) -> Outcome {
@@ -109,6 +125,9 @@ final class ImageStitcher: @unchecked Sendable {
         }
         guard prev.width == frame.width, prev.height == frame.height else { return .noMatch }
         if Self.isSame(prev, frame) { failStreak = 0; return .unchanged }
+        if let rejected = lastRejected, rejected === frame || rejected.rows == frame.rows {
+            return .noMatch
+        }
 
         let outcome = place(frame, relativeTo: prev, at: anchorY)
         if case .noMatch = outcome {
@@ -122,24 +141,28 @@ final class ImageStitcher: @unchecked Sendable {
                 return .noMatch
             }
             // 已有内容：和关键帧逐个比，找回位置（从最近的开始）
-            for k in keyframes.reversed() where k.frame !== prev {
+            // 不把一次失配扩展成几十轮完整配准；找不到时提示用户回滚，而非拖住捕获。
+            for k in keyframes.reversed().filter({ $0.frame !== prev }).prefix(4) {
                 let saved = (anchor, anchorY)
                 anchor = k.frame; anchorY = k.y
                 let o = place(frame, relativeTo: k.frame, at: k.y)
                 if case .noMatch = o { anchor = saved.0; anchorY = saved.1; continue }
                 failStreak = 0
+                lastRejected = nil
                 lastDiagnostics.reason += " via-keyframe"
                 return o
             }
+            lastRejected = frame
             return .noMatch
         }
         failStreak = 0
+        lastRejected = nil
         return outcome
     }
 
     /// 尝试把 frame 放到画布上：ref 是已在画布上的帧，refY 是它的位置
     private func place(_ frame: Frame, relativeTo prev: Frame, at refY: Int) -> Outcome {
-
+        matchingAttempts += 1
         let h = frame.height
         let footerRuns = Self.staticRuns(prev, frame, fromTop: false)
         let headerRuns = Self.staticRuns(prev, frame, fromTop: true)
@@ -147,17 +170,21 @@ final class ImageStitcher: @unchecked Sendable {
         let matchBottom = h - max(stickyFooter, footerRuns.full)
         guard matchBottom - matchTop > 48 else { return .noMatch }
 
-        // 1. 位移：半分辨率 Vision → 全分辨率 Vision → 行签名搜索（仅向下）
+        // 1. 位移：Vision 粗估必须通过校验；估计错误时仍尝试行签名搜索。
         var shift: Int?
         var source = ""
         var roughDy = 0.0
         let band = CGRect(x: 0, y: matchTop, width: frame.width, height: matchBottom - matchTop)
-        if let cur = frame.image.cropping(to: band), let pre = prev.image.cropping(to: band),
+        if useVision, let cur = frame.image.cropping(to: band), let pre = prev.image.cropping(to: band),
            let est = estimator.estimateFast(current: cur, previous: pre) ?? estimator.estimate(current: cur, previous: pre) {
-            shift = Self.refine(prev: prev, next: frame, around: Int(est.dy.rounded()), top: matchTop, bottom: matchBottom)
-            source = est.source
-            roughDy = Double(est.dy)
-        } else {
+            let refined = Self.refine(prev: prev, next: frame, around: Int(est.dy.rounded()), top: matchTop, bottom: matchBottom)
+            if Self.verify(prev: prev, next: frame, shift: refined, top: matchTop, bottom: matchBottom).ok {
+                shift = refined
+                source = est.source
+                roughDy = Double(est.dy)
+            }
+        }
+        if shift == nil {
             // 行签名搜索：向下、向上各试一次，取重叠区更吻合的
             let down = Self.findShift(prev: prev, next: frame, top: matchTop, bottom: matchBottom, expected: max(0, lastShift))
             let up = Self.findShift(prev: frame, next: prev, top: matchTop, bottom: matchBottom, expected: max(0, -lastShift))
@@ -203,7 +230,7 @@ final class ImageStitcher: @unchecked Sendable {
             let lineDown = top + Int(Double(bottom - top) * commitDownRatio)
             let lineUp = top + Int(Double(bottom - top) * commitUpRatio)
             let first = s > 0 ? (top, lineDown) : (lineUp, bottom)
-            if let img = prev.image.cropping(to: CGRect(x: 0, y: first.0, width: prev.width, height: first.1 - first.0)) {
+            if let img = Self.copyStrip(prev.image, rect: CGRect(x: 0, y: first.0, width: prev.width, height: first.1 - first.0)) {
                 downStrips = [img]
                 committedMin = anchorY + first.0
                 committedMax = anchorY + first.1
@@ -251,7 +278,7 @@ final class ImageStitcher: @unchecked Sendable {
     private func commitDown(from f: Frame, frameY: Int, endRow: Int, top: Int) {
         let startRow = max(top, committedMax - frameY)
         guard endRow > startRow, totalHeight + (endRow - startRow) <= maxTotalHeight,
-              let img = f.image.cropping(to: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
+              let img = Self.copyStrip(f.image, rect: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
         downStrips.append(img)
         committedMax = frameY + endRow
         bottomEdgeFrameRow = endRow
@@ -261,10 +288,10 @@ final class ImageStitcher: @unchecked Sendable {
     private func trimTopEdge(toFrameRow row: Int) {
         let n = row - topEdgeFrameRow
         guard n > 0, let cMin = committedMin else { return }
-        if var s = upStrips.last, s.height > n, let c = s.cropping(to: CGRect(x: 0, y: n, width: s.width, height: s.height - n)) {
+        if var s = upStrips.last, s.height > n, let c = Self.copyStrip(s, rect: CGRect(x: 0, y: n, width: s.width, height: s.height - n)) {
             s = c; upStrips[upStrips.count - 1] = s
         } else if upStrips.isEmpty, let s = downStrips.first, s.height > n,
-                  let c = s.cropping(to: CGRect(x: 0, y: n, width: s.width, height: s.height - n)) {
+                  let c = Self.copyStrip(s, rect: CGRect(x: 0, y: n, width: s.width, height: s.height - n)) {
             downStrips[0] = c
         } else { return }
         committedMin = cMin + n
@@ -275,7 +302,7 @@ final class ImageStitcher: @unchecked Sendable {
     private func trimBottomEdge(toFrameRow row: Int) {
         let n = bottomEdgeFrameRow - row
         guard n > 0, let s = downStrips.last, s.height > n,
-              let c = s.cropping(to: CGRect(x: 0, y: 0, width: s.width, height: s.height - n)) else { return }
+              let c = Self.copyStrip(s, rect: CGRect(x: 0, y: 0, width: s.width, height: s.height - n)) else { return }
         downStrips[downStrips.count - 1] = c
         committedMax -= n
         bottomEdgeFrameRow = row
@@ -286,10 +313,20 @@ final class ImageStitcher: @unchecked Sendable {
         guard let cMin = committedMin else { return }
         let endRow = min(bottom, cMin - frameY)
         guard endRow > startRow, totalHeight + (endRow - startRow) <= maxTotalHeight,
-              let img = f.image.cropping(to: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
+              let img = Self.copyStrip(f.image, rect: CGRect(x: 0, y: startRow, width: f.width, height: endRow - startRow)) else { return }
         upStrips.append(img)
         committedMin = frameY + startRow
         topEdgeFrameRow = startRow
+    }
+
+    /// CGImage 裁剪默认仍持有整帧内存；提交窄条带时只保留该条带的像素。
+    private static func copyStrip(_ image: CGImage, rect: CGRect) -> CGImage? {
+        guard let cropped = image.cropping(to: rect),
+              let ctx = CGContext(data: nil, width: cropped.width, height: cropped.height, bitsPerComponent: 8,
+                                  bytesPerRow: cropped.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height))
+        return ctx.makeImage()
     }
 
     /// 结束时把锚点帧里还没写入的上下两端补上
@@ -328,30 +365,50 @@ final class ImageStitcher: @unchecked Sendable {
             let sc = s >= 0
                 ? meanDiff(prev.rows, next.rows, aStart: top + s + skip, bStart: top + skip, count: n, step: 1)
                 : meanDiff(prev.rows, next.rows, aStart: top + skip, bStart: top - s + skip, count: n, step: 1)
-            if sc < bestScore - 0.05 || (abs(sc - bestScore) <= 0.05 && abs(s - rough) < abs(best - rough)) {
-                bestScore = min(sc, bestScore); best = s
+            if sc < bestScore || (sc == bestScore && abs(s - rough) < abs(best - rough)) {
+                bestScore = sc; best = s
             }
         }
         return best
     }
 
-    /// 预览：画布底部若干像素 + 锚点帧里还没写入的部分
-    func preview(minHeight: Int) -> CGImage? {
+    /// 完整实时预览：临时补齐最新帧两端，不提交边缘像素，避免影响后续接缝。
+    /// 直接渲染到有限大小的缩略图，不在每次滚动时分配整张原尺寸长图。
+    func preview(maxWidth: Int = 536, maxHeight: Int = 1024) -> CGImage? {
         guard let a = anchor else { return nil }
-        guard committedMin != nil else { return a.image }
-        var picked: [CGImage] = []
-        let pendingStart = max(stickyTop, committedMax - anchorY)
-        let pendingEnd = a.height - stickyFooter
-        if pendingEnd > pendingStart, let p = a.image.cropping(to: CGRect(x: 0, y: pendingStart, width: a.width, height: pendingEnd - pendingStart)) {
-            picked.append(p)
+        var all: [CGImage] = []
+        if let cMin = committedMin {
+            let top = stickyTop, bottom = a.height - stickyFooter
+            func appendRows(_ start: Int, _ end: Int) {
+                guard end > start,
+                      let strip = a.image.cropping(to: CGRect(x: 0, y: start, width: a.width, height: end - start)) else { return }
+                all.append(strip)
+            }
+            appendRows(0, top)
+            appendRows(top, min(bottom, cMin - anchorY))
+            all.append(contentsOf: upStrips.reversed())
+            all.append(contentsOf: downStrips)
+            appendRows(max(top, committedMax - anchorY), bottom)
+            appendRows(bottom, a.height)
+        } else {
+            all = [a.image]
         }
-        var hgt = picked.first?.height ?? 0
-        for s in downStrips.reversed() {
-            picked.insert(s, at: 0)
-            hgt += s.height
-            if hgt >= minHeight { break }
+        let height = all.reduce(0) { $0 + $1.height }
+        guard maxWidth > 0, maxHeight > 0, height > 0 else { return nil }
+        let scale = min(1, min(Double(maxWidth) / Double(a.width), Double(maxHeight) / Double(height)))
+        let width = max(1, Int((Double(a.width) * scale).rounded()))
+        let outputHeight = max(1, Int((Double(height) * scale).rounded()))
+        guard let ctx = CGContext(data: nil, width: width, height: outputHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .low
+        ctx.scaleBy(x: CGFloat(width) / CGFloat(a.width), y: CGFloat(outputHeight) / CGFloat(height))
+        var y = height
+        for strip in all {
+            y -= strip.height
+            ctx.draw(strip, in: CGRect(x: 0, y: y, width: strip.width, height: strip.height))
         }
-        return Self.stack(picked)
+        return ctx.makeImage()
     }
 
     /// 合成整张图：顶栏 + 画布 + 底栏
@@ -436,10 +493,12 @@ final class ImageStitcher: @unchecked Sendable {
             if lo <= hi {
                 var local = (shift: lo, score: Double.infinity)
                 for s in lo...hi {
-                    let sc = score(s, step: 3)
+                    let sc = score(s, step: 1)
                     if sc < local.score { local = (s, sc) }
                 }
-                if local.score < 1.0 {
+                // 预期步长附近的近似匹配可能只是稀疏内容相差一两行。
+                // 只有零误差才提前返回，否则继续全范围搜索。
+                if local.score == 0 {
                     let fine = score(local.shift, step: 1)
                     let halves = halfScores(prev: prev, next: next, top: top, bandH: bandH, shift: local.shift)
                     if fine < 1.5, halves.0 < 6, halves.1 < 6 { return (local.shift, fine) }
@@ -454,7 +513,9 @@ final class ImageStitcher: @unchecked Sendable {
             s += 2
         }
         guard let coarse = candidates.min(by: { $0.score < $1.score }) else { return nil }
-        var best = coarse
+        // 粗搜 step=4 的分数不能与逐行分数比较：它可能跳过所有差异行，
+        // 错误位移得分为 0，导致真正的整像素匹配再也无法胜出。
+        var best = (shift: coarse.shift, score: score(coarse.shift, step: 1))
         for s in max(minShift, coarse.shift - 3)...min(maxShift, coarse.shift + 3) {
             let sc = score(s, step: 1)
             if sc < best.score { best = (s, sc) }
@@ -470,19 +531,6 @@ final class ImageStitcher: @unchecked Sendable {
             return nil
         }
 
-        // 内容单调（大片空白）时很多候选几乎同分：只有在最优解本身已接近完美、且候选确实多到分不清时，才取最接近预期滚动量的
-        if expected > 0, best.score < 1.0 {
-            let near = candidates.filter { $0.score <= best.score + 0.5 }
-            if near.count >= 4, let pick = near.min(by: { abs($0.shift - expected) < abs($1.shift - expected) }),
-               abs(pick.shift - expected) < abs(best.shift - expected) {
-                var refined = pick
-                for s in max(minShift, pick.shift - 3)...min(maxShift, pick.shift + 3) {
-                    let sc = score(s, step: 1)
-                    if sc < refined.score { refined = (s, sc) }
-                }
-                return (refined.shift, refined.score)
-            }
-        }
         return (best.shift, best.score)
     }
 

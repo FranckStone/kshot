@@ -73,15 +73,48 @@ enum FeatureTests {
 
     static func runIfRequested() -> Bool {
         let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--stitch-replay"), i + 1 < args.count {
+            stitchReplay(args[i + 1]); return true
+        }
         if args.contains("--redact-test") { redactTest(); return true }
         if args.contains("--beautify-test") { beautifyTest(); return true }
         if args.contains("--prefs-test") { prefsTest(); return true }
         if args.contains("--editor-test") { editorTest(); return true }
+        if let i = args.firstIndex(of: "--editor-image"), i + 1 < args.count {
+            editorImageTest(args[i + 1]); return true
+        }
         if let i = args.firstIndex(of: "--record-test"), i + 1 < args.count { recordTest(args[i + 1]); return true }
         if args.contains("--shadow-test") { shadowTest(); return true }
         if args.contains("--history-test") { historyTest(); return true }
         if args.contains("--gif-test") { gifTest(); return true }
         return false
+    }
+
+    /// 重放故障现场保存的帧，检查重复失败是否还会触发昂贵的配准。
+    static func stitchReplay(_ path: String) {
+        Task.detached(priority: .userInitiated) {
+            let dir = URL(fileURLWithPath: path)
+            let urls = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "png" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            let stitcher = ImageStitcher()
+            var last: CGImage?
+            for url in urls {
+                guard let data = try? Data(contentsOf: url), let image = NSBitmapImageRep(data: data)?.cgImage else { continue }
+                let start = ProcessInfo.processInfo.systemUptime
+                let result = stitcher.push(image)
+                Log.info(String(format: "replay %@ %@ %.1fms attempts=%d", url.lastPathComponent, String(describing: result),
+                                (ProcessInfo.processInfo.systemUptime - start) * 1000, stitcher.matchingAttempts))
+                last = image
+            }
+            if let last {
+                let before = stitcher.matchingAttempts
+                let start = ProcessInfo.processInfo.systemUptime
+                for _ in 0..<20 { _ = stitcher.push(last) }
+                Log.info(String(format: "replay repeated: %.1fms/20 frames extraAttempts=%d stripBytes=%d", (ProcessInfo.processInfo.systemUptime - start) * 1000,
+                                stitcher.matchingAttempts - before, stitcher.debugStripStorageBytes))
+            }
+            await MainActor.run { NSApp.terminate(nil) }
+        }
     }
 
     /// 自动打码 + 二维码识别
@@ -211,6 +244,48 @@ enum FeatureTests {
         w.debugHandle(.redo)
         write(c.export(), "editor-export.png")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+    }
+
+    /// 用真实长图验证原生编辑器在顶部、中部、底部及回滚后的显示。
+    static func editorImageTest(_ path: String) {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let img = NSBitmapImageRep(data: data)?.cgImage, let screen = NSScreen.main else {
+            Log.info("editor-image: 无法读取图片 \(path)")
+            NSApp.terminate(nil)
+            return
+        }
+        let w = ImageEditorWindow(image: img, scale: screen.backingScaleFactor, screen: screen, title: "长截图显示验证")
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        Task { @MainActor in
+            for (index, y) in [CGFloat(0), 400, 1000, 0].enumerated() {
+                if index == 1 { w.setFrame(CGRect(origin: w.frame.origin, size: CGSize(width: 560, height: w.frame.height)), display: true) }
+                if index == 2 {
+                    w.setFrame(CGRect(origin: w.frame.origin, size: CGSize(width: 800, height: w.frame.height)), display: true)
+                    w.debugHandle(.tool(.rect))
+                }
+                if index == 3 { w.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 8, y: w.frame.minY)) }
+                w.debugScroll(to: y)
+                try? await Task.sleep(for: .milliseconds(350))
+                let shot = await WindowShadow.captureRaw(windowID: CGWindowID(w.windowNumber))
+                write(shot, "longshot-editor-viewport-\(index).png")
+                let toolbar = w.debugToolbarPanel
+                let toolbarShot = await WindowShadow.captureRaw(windowID: CGWindowID(toolbar.windowNumber))
+                write(toolbarShot, "longshot-editor-toolbar-\(index).png")
+                // 合成区域抓屏，验证外置面板与窗口的距离以及窄窗口布局。
+                var area = w.frame.union(toolbar.frame)
+                if w.debugOptionsPanel.isVisible { area = area.union(w.debugOptionsPanel.frame) }
+                area = area.insetBy(dx: -8, dy: -8).intersection(screen.frame)
+                let local = CGRect(x: area.minX - screen.frame.minX, y: screen.frame.maxY - area.maxY, width: area.width, height: area.height)
+                if let capturer = try? await RegionCapturer(screen: screen, localRect: local, excludingWindowIDs: [], excludeOwnApp: false) {
+                    write(try? await capturer.capture(), "longshot-editor-layout-\(index).png")
+                }
+                Log.info("editor layout \(index): toolbarFits=\(screen.visibleFrame.contains(toolbar.frame)) toolbarWidth=\(toolbar.frame.width) windowWidth=\(w.frame.width) imageCenterOffset=\(w.debugImageCenterOffset)")
+            }
+            write(w.debugCanvas.export(), "longshot-editor-export.png")
+            w.closeEditor()
+            NSApp.terminate(nil)
+        }
     }
 
     static func recordTest(_ spec: String) {

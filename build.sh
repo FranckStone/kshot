@@ -23,15 +23,26 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$KSHOT_BIN_DIR/KShot" "$APP/Contents/MacOS/KShot"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Frameworks"
+KSHOT_SPARKLE_SOURCE=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+/usr/bin/ditto "$KSHOT_SPARKLE_SOURCE" "$APP/Contents/Frameworks/Sparkle.framework"
+cp .build/artifacts/sparkle/Sparkle/LICENSE "$APP/Contents/Resources/Sparkle-LICENSE.txt"
 if [ -f Resources/AppIcon.icns ]; then
   cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 fi
 
 # 优先使用稳定的开发证书签名，这样“屏幕录制”权限在重新编译后不会失效
 IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 'Apple Development' | sed -E 's/.*"(.*)"/\1/' || true)"
-if [ -n "$IDENTITY" ]; then
-  codesign --force --sign "$IDENTITY" --identifier com.frank.kshot "$APP"
-else
-  codesign --force --sign - --identifier com.frank.kshot "$APP"
-fi
+IDENTITY="${IDENTITY:--}"
+# 从内到外签名，保留 Sparkle 辅助进程的权限与 hardened runtime 标记。
+KSHOT_SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+for KSHOT_HELPER in "$KSHOT_SPARKLE/Autoupdate" \
+  "$KSHOT_SPARKLE/Updater.app" \
+  "$KSHOT_SPARKLE/XPCServices/Downloader.xpc" \
+  "$KSHOT_SPARKLE/XPCServices/Installer.xpc"; do
+  codesign --force --sign "$IDENTITY" --preserve-metadata=identifier,entitlements,flags "$KSHOT_HELPER"
+done
+codesign --force --sign "$IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force --sign "$IDENTITY" --identifier com.frank.kshot "$APP"
+codesign --verify --deep --strict "$APP"
 echo "✅ 已生成 $APP"

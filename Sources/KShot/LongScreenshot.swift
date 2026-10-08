@@ -10,10 +10,9 @@ final class LongScreenshotSession {
     private let region: CGRect          // 屏幕局部坐标（左上原点，pt）
     private let stitcher = ImageStitcher()
     private var panel: LongShotPanel!
+    private var regionOutline: LongShotRegionWindow?
     private var running = false
     private var frames = 0
-    private var staticCount = 0
-    private var noMatchCount = 0
     private var autoScroll = false
     private var excluded: Set<CGWindowID> = []
     private var lastHint = ""
@@ -24,6 +23,8 @@ final class LongScreenshotSession {
     var debugOutputURL: URL?
     /// 调试：完成回调
     var onFinish: ((CGImage) -> Void)?
+    /// 调试：演示脚本在自动暂停后模拟按下完成。
+    var onAutoPause: (() -> Void)?
 
     /// 每帧保存到 ~/Library/Logs/KShot-longshot/，便于排查拼接问题
     private let dumpDir: URL = {
@@ -47,20 +48,24 @@ final class LongScreenshotSession {
         LongScreenshotSession.current = self
         running = true
         let regionCocoa = screen.cocoaRect(fromLocal: region)
+        let outline = LongShotRegionWindow(region: regionCocoa)
+        regionOutline = outline
+        outline.orderFrontRegardless()
         panel = LongShotPanel(near: regionCocoa, screen: screen)
         panel.onFinish = { [weak self] in self?.finish() }
         panel.onCancel = { [weak self] in self?.cancel() }
         panel.onToggleAuto = { [weak self] in self?.toggleAuto() }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        excluded = [CGWindowID(panel.windowNumber)]
+        excluded = [CGWindowID(panel.windowNumber), CGWindowID(outline.windowNumber)]
         panel.setAuto(autoScroll)
         panel.setStatus("在区域内用触控板或滚轮向下滚动，内容会实时拼接到预览里")
         Log.info("longshot start region=\(region) auto=\(autoScroll)")
-        Task { @MainActor in await loop() }
+        startTask = Task { @MainActor in await loop() }
     }
 
     private func toggleAuto() {
+        guard running else { return }
         if !autoScroll {
             // 自动滚动需要“辅助功能”权限来发送滚轮事件
             let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
@@ -69,44 +74,48 @@ final class LongScreenshotSession {
                 return
             }
         }
-        staticCount = 0
-        lastAppendTime = Date()
         setAuto(!autoScroll)
-        panel.setStatus(autoScroll ? "正在自动滚动…到底后自动停止，也可随时按回车完成" : "已切回手动：请自己滚动内容")
+        panel.setStatus(autoScroll ? "正在自动滚动…画面静止时暂停，按回车完成" : "已切回手动：请自己滚动内容")
     }
 
     private var stream: RegionStream?
     private var autoTimer: Timer?
-    private var lastAppendTime = Date()
-    /// 自动滚动步进锁：发出一次滚动后，必须等到一帧处理完才发下一次
-    private var awaitingFrame = false
-    private var lastScrollAt = Date.distantPast
+    private var autoProgress = LongShotAutoScroll()
+    private var startTask: Task<Void, Never>?
+    private var finishTask: Task<Void, Never>?
     private var dumpNoMatchBudget = 12
 
     private func loop() async {
         do {
-            stream = try await RegionStream(screen: screen, localRect: region, excludingWindowIDs: excluded,
-                                            excludeOwnApp: customScroller == nil, trimBottom: Self.bottomTrimPx) { [weak self] frame in
-                self?.process(frame)
+            let newStream = try await RegionStream(screen: screen, localRect: region, excludingWindowIDs: excluded,
+                                                   excludeOwnApp: customScroller == nil) { [weak self] frame, capturedAt in
+                self?.process(frame, capturedAt: capturedAt)
             }
+            stream = newStream
+            guard running else { newStream.stop(); return }
             setAuto(autoScroll)
         } catch {
+            guard running else { return }
             fail("抓屏失败：\(error.localizedDescription)")
             return
         }
-        // 自动滚动：定时发滚轮事件；1.2 秒没有新内容视为到底
+        // 静止或抓帧停顿时只暂停自动滚动，保留会话让用户继续或完成。
         autoTimer = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.running, self.autoScroll else { return }
-                // 上一次滚动的画面还没处理完就不再滚；超过 0.6 秒没回音也放行，避免卡死
-                if !self.awaitingFrame || Date().timeIntervalSince(self.lastScrollAt) > 0.6 {
-                    self.awaitingFrame = true
-                    self.lastScrollAt = Date()
+                switch self.autoProgress.next(at: ProcessInfo.processInfo.systemUptime) {
+                case .scroll:
                     self.postScroll()
-                }
-                if Date().timeIntervalSince(self.lastAppendTime) > 1.2, self.frames > 0 {
-                    Log.info("longshot reached bottom")
-                    self.finish()
+                case .pauseStationary:
+                    self.setAuto(false)
+                    self.hint("画面已停止变化，已暂停自动滚动；可继续滚动或按回车完成")
+                    self.onAutoPause?()
+                case .pauseStalled:
+                    self.setAuto(false)
+                    self.hint("未收到滚动后的画面，已暂停自动滚动；可重试或按回车完成")
+                    self.onAutoPause?()
+                case .wait:
+                    break
                 }
             }
         }
@@ -117,14 +126,13 @@ final class LongScreenshotSession {
     nonisolated(unsafe) private var workerExpected = 0
     nonisolated(unsafe) private var workerFrames = 0
     nonisolated(unsafe) private var workerNoMatch = 0
-    nonisolated(unsafe) private var lastPreviewAt = Date.distantPast
 
-    /// 在捕获队列上拼接（不占主线程），只把结果和节流后的预览发回主线程
+    /// 在捕获队列上拼接并生成缩略图（不占主线程），每次成功拼接即更新预览。
     nonisolated(unsafe) private var procTotal = 0.0
     nonisolated(unsafe) private var procCount = 0
     nonisolated(unsafe) private var sourceCounts: [String: Int] = [:]
 
-    nonisolated private func process(_ frame: ImageStitcher.Frame) {
+    nonisolated private func process(_ frame: ImageStitcher.Frame, capturedAt: TimeInterval) {
         let t0 = Date()
         defer {
             procTotal += Date().timeIntervalSince(t0); procCount += 1
@@ -138,7 +146,13 @@ final class LongScreenshotSession {
         }
         do {
             // 逐帧记录，便于事后定位拼接错误（unchanged 太多，不记）
-            if case .unchanged = outcome {} else {
+            let shouldLog: Bool
+            switch outcome {
+            case .unchanged: shouldLog = false
+            case .noMatch: shouldLog = workerNoMatch == 0 || workerNoMatch % 60 == 0
+            default: shouldLog = true
+            }
+            if shouldLog {
                 let d = stitcher.lastDiagnostics
                 Log.info("frame \(outcome) shift=\(d.shift) rough=\(String(format: "%.1f", d.rough)) diff=\(String(format: "%.2f", d.score)) src=\(d.reason) \(stitcher.debugState)")
             }
@@ -148,30 +162,34 @@ final class LongScreenshotSession {
         case .appended:
             workerFrames += 1
             workerNoMatch = 0
-            if Date().timeIntervalSince(lastPreviewAt) > 0.12 {
-                lastPreviewAt = Date()
-                preview = stitcher.preview(minHeight: frame.height * 3 / 2)
-            }
+            preview = stitcher.preview()
         case .noMatch:
             workerNoMatch += 1
         default:
+            workerNoMatch = 0
             break
         }
-        let total = stitcher.totalHeight
+        let total = stitcher.previewHeight
         let diag = stitcher.lastDiagnostics
         let noMatch = workerNoMatch
         let image = frame.image
-        Task { @MainActor in self.apply(outcome, total: total, diag: diag, noMatch: noMatch, preview: preview, image: image) }
+        Task { @MainActor in self.apply(outcome, total: total, diag: diag, noMatch: noMatch, preview: preview, image: image, capturedAt: capturedAt) }
     }
 
-    private func apply(_ outcome: ImageStitcher.Outcome, total: Int, diag: ImageStitcher.Diagnostics, noMatch: Int, preview: CGImage?, image: CGImage) {
+    private func apply(_ outcome: ImageStitcher.Outcome, total: Int, diag: ImageStitcher.Diagnostics, noMatch: Int, preview: CGImage?, image: CGImage, capturedAt: TimeInterval) {
         guard running else { return }
-        // 滚动后至少过 60ms 的帧才算“已看到这次滚动的结果”（避开滚动前已在队列里的旧帧）
-        if Date().timeIntervalSince(lastScrollAt) > 0.06 { awaitingFrame = false }
+        if autoScroll {
+            let observation: LongShotAutoScroll.Observation
+            switch outcome {
+            case .unchanged: observation = .unchanged
+            case .noMatch: observation = .unmatched
+            default: observation = .moved
+            }
+            autoProgress.observe(observation, capturedAt: capturedAt)
+        }
         switch outcome {
         case .appended(let rows):
             frames += 1
-            lastAppendTime = Date()
             if frames <= 3 || frames % 10 == 0 { dump(image) }
             if frames % 5 == 0 || rows > 200 {
                 Log.info("longshot appended \(rows) px (score \(String(format: "%.2f", diag.score)), header \(diag.header), footer \(diag.footer)), total \(total)")
@@ -197,14 +215,15 @@ final class LongScreenshotSession {
 
     private func setAuto(_ on: Bool) {
         autoScroll = on
+        autoProgress.begin(at: ProcessInfo.processInfo.systemUptime)
         let expected = Int(scrollStep * screen.backingScaleFactor)
-        streamQueueSync { self.workerAuto = on; self.workerExpected = expected }
+        if let stream {
+            stream.enqueue { self.workerAuto = on; self.workerExpected = expected }
+        } else {
+            workerAuto = on
+            workerExpected = expected
+        }
         panel.setAuto(on)
-    }
-
-    /// 在捕获队列上同步执行（保证与 process 串行）
-    private func streamQueueSync(_ body: () -> Void) {
-        if let stream { stream.queueSync(body) } else { body() }
     }
 
     private func hint(_ s: String) {
@@ -213,16 +232,6 @@ final class LongScreenshotSession {
         if !s.isEmpty { panel.setStatus(s) }
         else if !autoScroll { panel.setStatus("继续向下滚动；完成后按回车") }
     }
-
-    private func updatePanel() {
-        panel.setProgress(frames: frames, height: stitcher.totalHeight)
-        if let preview = stitcher.preview(minHeight: Int(region.height * screen.backingScaleFactor * 1.5)) {
-            panel.setPreview(preview, scale: screen.backingScaleFactor)
-        }
-    }
-
-    /// 每帧忽略底部的几个像素：区域贴着窗口底边时，窗口圆角/阴影会在每个接缝处留下痕迹
-    private static let bottomTrimPx = 26
 
     private func dump(_ image: CGImage) {
         dumpIndex += 1
@@ -234,6 +243,8 @@ final class LongScreenshotSession {
 
     /// 停止捕获（保留 stream 对象以便之后在其队列上合成结果）
     private func stopStream() {
+        regionOutline?.orderOut(nil)
+        regionOutline = nil
         autoTimer?.invalidate()
         autoTimer = nil
         stream?.stop()
@@ -253,32 +264,55 @@ final class LongScreenshotSession {
     private func finish() {
         guard running else { return }
         running = false
+        let activeStream = stream
+        let startup = startTask
         stopStream()
-        panel.orderOut(nil)
-        LongScreenshotSession.current = nil
-        var composed: CGImage?
-        streamQueueSync { composed = stitcher.compose() }
-        stream = nil
-        guard let image = composed else { fail("没有拼接出内容"); return }
-        if let debugOutputURL, let data = Exporter.pngData(image) { try? data.write(to: debugOutputURL) }
-        if let data = Exporter.pngData(image) { try? data.write(to: dumpDir.appendingPathComponent("result.png")) }
-        onFinish?(image)
-        Exporter.copyToClipboard(image)
-        let win = ImageEditorWindow(image: image, scale: screen.backingScaleFactor, screen: screen, title: "长截图")
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        var stats = ""
-        streamQueueSync { stats = String(format: "avg %.1fms over %d frames, sources %@", self.procTotal / Double(max(1, self.procCount)) * 1000, self.procCount, self.sourceCounts.description) }
-        Log.info("longshot done: \(image.width)x\(image.height), frames=\(frames), \(stats)")
+        panel.setStatus("正在合成长截图…可点取消")
+        let outputURL = debugOutputURL
+        let resultURL = dumpDir.appendingPathComponent("result.png")
+        finishTask = Task { @MainActor in
+            defer {
+                finishTask = nil
+                stream = nil
+                if LongScreenshotSession.current === self { LongScreenshotSession.current = nil }
+            }
+            let compose: @Sendable () -> (CGImage?, Data?, String) = {
+                let image = self.stitcher.compose()
+                let data = image.flatMap { Exporter.pngData($0) }
+                if let data {
+                    if let outputURL { try? data.write(to: outputURL) }
+                    try? data.write(to: resultURL)
+                }
+                let stats = String(format: "avg %.1fms over %d frames, sources %@", self.procTotal / Double(max(1, self.procCount)) * 1000, self.procCount, self.sourceCounts.description)
+                return (image, data, stats)
+            }
+            let result: (CGImage?, Data?, String)
+            if activeStream == nil { await startup?.value }
+            if let finalStream = activeStream ?? stream { result = await finalStream.perform(compose) }
+            else { result = await Task.detached(priority: .userInitiated, operation: compose).value }
+            guard !Task.isCancelled else { return }
+            panel.orderOut(nil)
+            guard let image = result.0 else { fail("没有拼接出内容"); return }
+            onFinish?(image)
+            Exporter.copyToClipboard(image, preencodedPNG: result.1)
+            let win = ImageEditorWindow(image: image, scale: screen.backingScaleFactor, screen: screen, title: "长截图")
+            win.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            Log.info("longshot done: \(image.width)x\(image.height), frames=\(frames), \(result.2)")
+        }
     }
 
     func debugFinish() { finish() }
+    var debugPanelWindowID: CGWindowID { CGWindowID(panel.windowNumber) }
 
     private func cancel() {
+        guard running || finishTask != nil else { return }
         running = false
+        finishTask?.cancel()
+        startTask?.cancel()
         stopStream()
         panel.orderOut(nil)
-        LongScreenshotSession.current = nil
+        if LongScreenshotSession.current === self { LongScreenshotSession.current = nil }
         Log.info("longshot cancelled")
     }
 
@@ -292,6 +326,31 @@ final class LongScreenshotSession {
         alert.informativeText = message
         alert.runModal()
     }
+}
+
+/// 捕获范围提示：透明且穿透鼠标，滚轮和点击仍交给下方应用。
+final class LongShotRegionWindow: NSWindow {
+    init(region: CGRect) {
+        // 红线放在选区外侧，线与内容之间留 1pt，避免窗口过滤延迟时混进截图。
+        let frame = region.insetBy(dx: -3, dy: -3)
+        super.init(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        level = .statusBar
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        animationBehavior = .none
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        let outline = NSView(frame: CGRect(origin: .zero, size: frame.size))
+        outline.wantsLayer = true
+        outline.layer?.borderColor = NSColor.systemRed.cgColor
+        outline.layer?.borderWidth = 2
+        contentView = outline
+        setFrame(frame, display: false)
+    }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 /// 长截图进行中的控制面板（玻璃）：实时预览 + 状态 + 自动/手动切换

@@ -51,6 +51,7 @@ enum LongShotDemo {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { MainActor.assumeIsolated {
             let session = LongScreenshotSession(screen: screen, region: region, forceAuto: !manual)
             session.customScroller = { step in scrollBy(step) }
+            if !manual { session.onAutoPause = { [weak session] in session?.debugFinish() } }
             if manual {
                 // 模拟人手滚动：步长不一、偶尔往回滚、速度忽快忽慢，滚到底后按“完成”
                 let down: [CGFloat] = [60, 90, 120, 40, -70, 150, 200, 80, 30, 220, 110, -40, 180, 90, 200, 220, 120, 160, 80, 200, 150, 100, 90, 60, 120, 150, 100]
@@ -116,6 +117,17 @@ enum LongShotDemo {
                 }
             }
             session.start()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                let area = region.insetBy(dx: -6, dy: -6)
+                if let capturer = try? await RegionCapturer(screen: screen, localRect: area, excludingWindowIDs: [], excludeOwnApp: false) {
+                    FeatureTests.write(try? await capturer.capture(), "longshot-region-outline.png")
+                }
+                for (index, delay) in [0, 1750, 2000].enumerated() {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    FeatureTests.write(await WindowShadow.captureRaw(windowID: session.debugPanelWindowID), "longshot-preview-\(index).png")
+                }
+            }
         } }
     }
 }

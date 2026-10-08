@@ -782,6 +782,8 @@ private struct StatusBadge: View {
 // MARK: - 关于
 
 private struct AboutPage: View {
+    @ObservedObject private var updater = AppUpdater.shared
+
     var body: some View {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-"
         Page {
@@ -795,6 +797,28 @@ private struct AboutPage: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 18)
+            }
+            Card {
+                Row(title: "软件更新") {
+                    Button("检查更新…") { updater.checkForUpdates() }
+                        .buttonBorderShape(.capsule)
+                        .disabled(!updater.canCheckForUpdates)
+                }
+                Row(title: "自动检查更新", detail: "每天检查一次，有新版时可直接下载安装。") {
+                    Toggle("自动检查更新", isOn: Binding(
+                        get: { updater.automaticallyChecksForUpdates },
+                        set: { updater.setAutomaticChecks($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                Row(title: "上次检查", divider: false) {
+                    if let date = updater.lastCheckDate {
+                        Text(date, format: .dateTime.year().month().day().hour().minute())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("尚未检查").foregroundStyle(.secondary)
+                    }
+                }
             }
             Card {
                 Row(title: "源代码") {

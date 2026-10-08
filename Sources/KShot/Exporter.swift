@@ -61,7 +61,7 @@ enum Exporter {
         return rep.representation(using: .png, properties: [:])
     }
 
-    static func copyToClipboard(_ image: CGImage) {
+    static func copyToClipboard(_ image: CGImage, preencodedPNG: Data? = nil) {
         DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("KShotCaptureFinished"), object: nil) }
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -69,7 +69,7 @@ enum Exporter {
         let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
         items.append(nsImage)
         pb.writeObjects(items)
-        if let png = pngData(image) {
+        if let png = preencodedPNG ?? pngData(image) {
             pb.setData(png, forType: .png)
         }
     }

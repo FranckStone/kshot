@@ -10,17 +10,21 @@ final class ImageEditorWindow: NSWindow {
     private let options = OptionsView()
     private let scroll = NSScrollView()
     private let content = NSView()
+    private let toolbarPanel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    private let optionsPanel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    private var controlsReady = false
+    private var moveObserver: NSObjectProtocol?
     private let screenRef: NSScreen
 
     init(image: CGImage, scale: CGFloat, screen: NSScreen, title: String) {
         canvas = ImageCanvasView(image: image, scale: scale)
         screenRef = screen
         let v = screen.visibleFrame
-        let bottomBar: CGFloat = 108
+        let controlsSpace = ToolbarView.height + OptionsView.height + 28
         let width = min(canvas.frame.width + 40, v.width * 0.85)
-        let height = min(canvas.frame.height + 56 + bottomBar, v.height * 0.9)
+        let height = min(canvas.frame.height + 72, v.height - controlsSpace - 32)
         let size = NSSize(width: max(560, width), height: max(360, height))
-        let origin = CGPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2)
+        let origin = CGPoint(x: v.midX - size.width / 2, y: v.midY - (size.height + controlsSpace) / 2 + controlsSpace)
         super.init(contentRect: CGRect(origin: origin, size: size), styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
         level = .floating
         isOpaque = false
@@ -46,12 +50,14 @@ final class ImageEditorWindow: NSWindow {
         titleLabel.autoresizingMask = [.width, .minYMargin]
         content.addSubview(titleLabel)
 
-        scroll.frame = CGRect(x: 16, y: bottomBar, width: size.width - 32, height: size.height - 56 - bottomBar)
+        scroll.frame = CGRect(x: 16, y: 16, width: size.width - 32, height: size.height - 72)
         scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
+        scroll.contentView = CenteredImageClipView()
         scroll.drawsBackground = false
+        scroll.contentView.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.wantsLayer = true
         scroll.layer?.cornerRadius = 10
@@ -69,8 +75,8 @@ final class ImageEditorWindow: NSWindow {
         options.size = canvas.strokeSize
         options.color = canvas.color
         options.isHidden = true
-        content.addSubview(options)
-        content.addSubview(editorToolbar)
+        configurePanel(toolbarPanel, view: editorToolbar)
+        configurePanel(optionsPanel, view: options)
         editorToolbar.setUndoEnabled(false)
         editorToolbar.setRedoEnabled(false)
         canvas.onAnnotationsChanged = { [weak self] in
@@ -82,8 +88,14 @@ final class ImageEditorWindow: NSWindow {
                 if a.usesColor { self.options.color = a.color }
             }
             self.options.isHidden = (self.canvas.tool == .none && self.canvas.marks.selected == nil)
+            self.layoutBars()
         }
+        controlsReady = true
         layoutBars()
+        addChildWindow(toolbarPanel, ordered: .above)
+        moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: self, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.layoutBars() }
+        }
 
         ImageEditorWindow.all.append(self)
         ImageEditorWindow.latest = self
@@ -92,14 +104,44 @@ final class ImageEditorWindow: NSWindow {
 
     override var canBecomeKey: Bool { true }
 
+    private func configurePanel(_ panel: NSPanel, view: NSView) {
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .floating
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        view.setFrameOrigin(.zero)
+        panel.setContentSize(view.frame.size)
+        panel.contentView = view
+    }
+
     private func layoutBars() {
-        let w = content.bounds.width
-        var tf = editorToolbar.frame
-        tf.origin = CGPoint(x: (w - tf.width) / 2, y: 14)
-        editorToolbar.frame = tf
-        var of = options.frame
-        of.origin = CGPoint(x: (w - of.width) / 2, y: tf.maxY + 6)
-        options.frame = of
+        guard controlsReady else { return }
+        let visible = (screen ?? screenRef).visibleFrame.insetBy(dx: 8, dy: 8)
+        let toolbarSize = editorToolbar.frame.size
+        let optionsSize = options.frame.size
+        let stackHeight = toolbarSize.height + (options.isHidden ? 0 : optionsSize.height + 8)
+        // 各面板独立保持原尺寸，窗口再窄也不会裁掉左右两端的按钮。
+        var y = frame.minY - 12 - toolbarSize.height
+        if y - (stackHeight - toolbarSize.height) < visible.minY,
+           frame.maxY + 12 + stackHeight <= visible.maxY {
+            y = frame.maxY + 12 + stackHeight - toolbarSize.height
+        }
+        y = min(max(y, visible.minY + stackHeight - toolbarSize.height), visible.maxY - toolbarSize.height)
+        let x = min(max(frame.midX - toolbarSize.width / 2, visible.minX), visible.maxX - toolbarSize.width)
+        toolbarPanel.setFrameOrigin(CGPoint(x: x, y: y))
+        let optionsX = min(max(frame.midX - optionsSize.width / 2, visible.minX), visible.maxX - optionsSize.width)
+        optionsPanel.setFrameOrigin(CGPoint(x: optionsX, y: y - 8 - optionsSize.height))
+        if options.isHidden {
+            optionsPanel.orderOut(nil)
+            if optionsPanel.parent != nil { removeChildWindow(optionsPanel) }
+        } else if optionsPanel.parent == nil {
+            addChildWindow(optionsPanel, ordered: .above)
+        }
     }
 
     override func setFrame(_ frameRect: NSRect, display flag: Bool) {
@@ -116,6 +158,7 @@ final class ImageEditorWindow: NSWindow {
             canvas.tool = (canvas.tool == t) ? .none : t
             editorToolbar.setSelectedTool(canvas.tool)
             options.isHidden = (canvas.tool == .none)
+            layoutBars()
         case .undo:
             canvas.undo()
         case .redo:
@@ -171,7 +214,10 @@ final class ImageEditorWindow: NSWindow {
 
     func closeEditor() {
         canvas.commitText()
+        toolbarPanel.orderOut(nil)
+        optionsPanel.orderOut(nil)
         orderOut(nil)
+        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver); self.moveObserver = nil }
         ImageEditorWindow.all.removeAll { $0 === self }
     }
 
@@ -207,7 +253,35 @@ final class ImageEditorWindow: NSWindow {
 
     // 调试
     var debugCanvas: ImageCanvasView { canvas }
+    var debugToolbarPanel: NSPanel { toolbarPanel }
+    var debugOptionsPanel: NSPanel { optionsPanel }
+    var debugImageCenterOffset: CGFloat {
+        canvas.frame.midX - scroll.contentView.bounds.midX
+    }
     func debugHandle(_ a: ToolbarAction) { handle(a) }
+    func debugScroll(to y: CGFloat) {
+        let maxY = max(0, canvas.bounds.height - scroll.contentView.bounds.height)
+        var bounds = scroll.contentView.bounds
+        bounds.origin.y = min(max(0, y), maxY)
+        scroll.contentView.scroll(to: scroll.contentView.constrainBoundsRect(bounds).origin)
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+}
+
+/// 通过可视区域的原点居中窄图，保留画布坐标和导出尺寸。
+final class CenteredImageClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        if let documentView, documentView.frame.width < rect.width {
+            rect.origin.x = documentView.frame.midX - rect.width / 2
+        }
+        return rect
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        scroll(to: constrainBoundsRect(bounds).origin)
+    }
 }
 
 /// 可标注的图片画布（左上原点、pt）
@@ -253,8 +327,12 @@ final class ImageCanvasView: NSView {
         // 长图很高，只绘制需要刷新的那一块，避免每次滚动都重绘整张图
         let r = dirtyRect.intersection(bounds)
         guard !r.isEmpty else { return }
+        // 画布以左上为原点，NSImage 的源矩形始终以左下为原点。
+        // respectFlipped 只修正目标绘制方向，不转换源矩形；直接 from: r
+        // 会让滚动重绘取到图像另一端，出现倒序、重复和断层。
+        let sourceRect = CGRect(x: r.minX, y: bounds.height - r.maxY, width: r.width, height: r.height)
         ctx.interpolationQuality = .none
-        nsImage.draw(in: r, from: r, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        nsImage.draw(in: r, from: sourceRect, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
         ctx.interpolationQuality = .high
         marks.draw(with: renderer, clip: bounds, in: ctx)
     }

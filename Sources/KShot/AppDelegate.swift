@@ -77,8 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 调试用：打开正式安装包的设置，核对系统标题栏和控件样式。
         if CommandLine.arguments.contains("--preferences") {
+            AppUpdater.shared.start()
             DispatchQueue.main.async { PreferencesWindow.show() }
             return
+        }
+        AppUpdater.shared.start()
+        if CommandLine.arguments.contains("--check-updates") {
+            AppUpdater.shared.checkForUpdates()
         }
         // 调试用：启动后立刻截图
         if CommandLine.arguments.contains("--shoot") {
@@ -133,6 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         item("设置…", #selector(openPreferences), key: ",")
+        let updates = item("检查更新…", #selector(AppUpdater.checkForUpdates(_:)))
+        updates.target = AppUpdater.shared
         menu.addItem(.separator())
         menu.delegate = self
         item("退出 KShot", #selector(quit), key: "q")
