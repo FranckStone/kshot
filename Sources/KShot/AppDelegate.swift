@@ -6,7 +6,6 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var iconAnimator: MenuBarAnimator?
-    private var launchAtLoginItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -76,6 +75,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        // 调试用：打开正式安装包的设置，核对系统标题栏和控件样式。
+        if CommandLine.arguments.contains("--preferences") {
+            DispatchQueue.main.async { PreferencesWindow.show() }
+            return
+        }
         // 调试用：启动后立刻截图
         if CommandLine.arguments.contains("--shoot") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.takeScreenshot() }
@@ -128,8 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(pinsItem)
         menu.addItem(.separator())
 
-        item("偏好设置…", #selector(openPreferences), key: ",")
-        launchAtLoginItem = item("开机自动启动", #selector(toggleLaunchAtLogin))
+        item("设置…", #selector(openPreferences), key: ",")
         menu.addItem(.separator())
         menu.delegate = self
         item("退出 KShot", #selector(quit), key: "q")
@@ -234,15 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleLaunchAtLogin() {
-        LaunchAtLogin.set(!LaunchAtLogin.isEnabled)
-        refreshLaunchAtLoginItem()
-    }
-
-    private func refreshLaunchAtLoginItem() {
-        launchAtLoginItem.state = LaunchAtLogin.isEnabled ? .on : .off
-    }
-
     // MARK: - Actions
 
     @objc func takeScreenshot() {
@@ -272,7 +266,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
-        refreshLaunchAtLoginItem()
         refreshPinsMenu()
         recordItem.title = ScreenRecorder.isRecording ? "停止录屏" : "录屏"
     }

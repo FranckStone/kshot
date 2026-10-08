@@ -105,7 +105,7 @@ final class HistoryMenu: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         items = History.items()
         if !Settings.historyEnabled {
-            menu.addItem(withTitle: "截图历史已关闭（可在偏好设置中打开）", action: nil, keyEquivalent: "").isEnabled = false
+            menu.addItem(withTitle: "截图历史已关闭（可在设置 › 历史中打开）", action: nil, keyEquivalent: "").isEnabled = false
         } else if items.isEmpty {
             menu.addItem(withTitle: "还没有截图", action: nil, keyEquivalent: "").isEnabled = false
         }

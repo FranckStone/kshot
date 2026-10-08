@@ -70,22 +70,15 @@ final class PreferencesWindow: NSWindow {
     private init() {
         let size = CGSize(width: 780, height: 600)
         super.init(contentRect: CGRect(origin: .zero, size: size),
-                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         title = "KShot 设置"
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
-        // 系统红绿灯换成侧栏里自绘的按钮（始终显示图标）
-        for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            standardWindowButton(b)?.isHidden = true
-        }
         minSize = size
         isReleasedWhenClosed = false
-        level = .floating
         let host = NSHostingView(rootView: SettingsView(model: model, window: self))
         host.sizingOptions = []   // 窗口尺寸固定，不跟随 SwiftUI 的理想尺寸
         contentView = host
-        setFrame(CGRect(origin: .zero, size: size), display: false)   // 内容延伸到标题栏下，整个窗口就是 size
+        setFrame(CGRect(origin: .zero, size: size), display: false)
     }
 
     override func resignKey() {
@@ -217,7 +210,7 @@ private struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(model: model, window: window)
+            Sidebar(model: model)
                 .frame(width: 220)
                 .padding(10)
             ScrollView {
@@ -250,14 +243,9 @@ private struct SettingsView: View {
 
 private struct Sidebar: View {
     @ObservedObject var model: PrefsModel
-    weak var window: NSWindow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WindowControls(window: window)
-                .padding(.leading, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 12)
             HStack(spacing: 10) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
@@ -267,6 +255,7 @@ private struct Sidebar: View {
                     Text("设置").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
+            .padding(.top, 14)
             .padding(.horizontal, 14)
             .padding(.bottom, 12)
 
@@ -280,101 +269,6 @@ private struct Sidebar: View {
         }
         .frame(maxHeight: .infinity)
         .glassPanel(cornerRadius: 22)
-    }
-}
-
-/// 窗口按钮（iPadOS 27 / macOS 27 风格）：液态玻璃胶囊里放三个纯色圆点，
-/// 悬停时显示图标，按下时弹性缩放；窗口失去焦点时圆点变灰
-private struct WindowControls: View {
-    weak var window: NSWindow?
-    @State private var hovered = false
-    @State private var isKey = true
-
-    var body: some View {
-        HStack(spacing: 8) {
-            WindowDot(kind: .close, hovered: hovered, active: isKey) { window?.performClose(nil) }
-            WindowDot(kind: .minimize, hovered: hovered, active: isKey) { window?.miniaturize(nil) }
-            WindowDot(kind: .zoom, hovered: hovered, active: isKey) { window?.zoom(nil) }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .glassCapsule()
-        .onHover { hovered = $0 }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification, object: window)) { _ in isKey = true }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification, object: window)) { _ in isKey = false }
-        .onAppear { isKey = window?.isKeyWindow ?? true }
-    }
-}
-
-private struct WindowDot: View {
-    enum Kind {
-        case close, minimize, zoom
-
-        // 颜色取自系统红绿灯
-        var fill: Color {
-            switch self {
-            case .close: return Color(red: 1.0, green: 0.373, blue: 0.341)
-            case .minimize: return Color(red: 0.996, green: 0.737, blue: 0.180)
-            case .zoom: return Color(red: 0.157, green: 0.784, blue: 0.251)
-            }
-        }
-        var glyphColor: Color {
-            switch self {
-            case .close: return Color(red: 0.55, green: 0.04, blue: 0.0)
-            case .minimize: return Color(red: 0.58, green: 0.33, blue: 0.0)
-            case .zoom: return Color(red: 0.0, green: 0.38, blue: 0.05)
-            }
-        }
-        var symbol: String {
-            switch self {
-            case .close: return "xmark"
-            case .minimize: return "minus"
-            case .zoom: return "plus"
-            }
-        }
-        var help: String {
-            switch self {
-            case .close: return "关闭"
-            case .minimize: return "最小化"
-            case .zoom: return "缩放"
-            }
-        }
-    }
-
-    let kind: Kind
-    let hovered: Bool
-    let active: Bool
-    let action: () -> Void
-    private let size: CGFloat = 13
-
-    var body: some View {
-        let lit = active || hovered
-        Button(action: action) {
-            Circle()
-                .fill(lit ? kind.fill : Color.primary.opacity(0.18))
-                .overlay(Circle().strokeBorder(Color.black.opacity(lit ? 0.14 : 0.06), lineWidth: 0.5))
-                .overlay {
-                    Image(systemName: kind.symbol)
-                        .font(.system(size: size * 0.58, weight: .heavy))
-                        .foregroundStyle(kind.glyphColor)
-                        .opacity(hovered ? 1 : 0)
-                }
-                .frame(width: size, height: size)
-                .contentShape(Circle())
-        }
-        .buttonStyle(SpringPressStyle())
-        .help(kind.help)
-        .animation(.easeOut(duration: 0.12), value: hovered)
-    }
-}
-
-/// 按下时收缩、松开时回弹
-private struct SpringPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.82 : 1)
-            .brightness(configuration.isPressed ? -0.08 : 0)
-            .animation(.spring(response: 0.28, dampingFraction: 0.45), value: configuration.isPressed)
     }
 }
 
@@ -544,7 +438,6 @@ private struct ToggleRow: View {
 
 private struct GeneralPage: View {
     @ObservedObject var model: PrefsModel
-    @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
     var body: some View {
         Page {
@@ -562,10 +455,12 @@ private struct GeneralPage: View {
                           isOn: model.bind({ Settings.recordShowsCursor }, { Settings.recordShowsCursor = $0 }))
             }
             Card(header: "启动") {
-                ToggleRow(title: "开机自动启动", detail: "登录后在菜单栏常驻", divider: false, isOn: Binding(get: { launchAtLogin }, set: { on in
-                    LaunchAtLogin.set(on)
-                    launchAtLogin = LaunchAtLogin.isEnabled
-                }))
+                // 每次读系统登录项的实际状态（用户也可能在系统设置里改）
+                ToggleRow(title: "开机自动启动", detail: "登录后在菜单栏常驻；也可在“系统设置 › 通用 › 登录项与扩展”中管理", divider: false,
+                          isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { on in
+                              LaunchAtLogin.set(on)
+                              model.refresh()
+                          }))
             }
         }
     }
@@ -929,15 +824,6 @@ private extension Color {
 }
 
 private extension View {
-    @ViewBuilder
-    func glassCapsule() -> some View {
-        if #available(macOS 26.0, *) {
-            glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-            background(.regularMaterial, in: Capsule())
-        }
-    }
-
     @ViewBuilder
     func glassPanel(cornerRadius: CGFloat) -> some View {
         if #available(macOS 26.0, *) {
