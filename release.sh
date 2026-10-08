@@ -33,4 +33,4 @@ ln -s /Applications "$KSHOT_DMG_STAGE/Applications"
 hdiutil create -volname "KShot $KSHOT_VERSION" -srcfolder "$KSHOT_DMG_STAGE" \
   -format UDZO "$KSHOT_RELEASE/$KSHOT_NAME.dmg"
 (cd "$KSHOT_RELEASE" && shasum -a 256 "$KSHOT_NAME.zip" "$KSHOT_NAME.dmg" appcast.xml > SHA256SUMS.txt)
-echo "已生成 $KSHOT_RELEASE，发布时必须同时上传 appcast.xml、ZIP、DMG 和 SHA256SUMS.txt。"
+echo "已生成 ${KSHOT_RELEASE}，发布时必须同时上传 appcast.xml、ZIP、DMG 和 SHA256SUMS.txt。"
