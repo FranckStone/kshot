@@ -134,6 +134,7 @@ final class ToolButton: NSButton {
 /// 工具条内容（按钮 + 分隔线），放进玻璃背板里
 final class ToolbarContentView: NSView {
     override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
     override func mouseDown(with event: NSEvent) {
         // 吞掉点击，避免穿透到遮罩层
     }
@@ -330,6 +331,8 @@ final class OptionsView: NSView {
 final class OptionsContentView: NSView {
     weak var owner: OptionsView?
     override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let o = owner else { return }

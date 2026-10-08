@@ -30,7 +30,8 @@ final class ImageEditorWindow: NSWindow {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        isMovableByWindowBackground = true
+        // 画布、工具按钮和选项都要收到自己的鼠标事件；只允许标题栏拖动窗口。
+        isMovableByWindowBackground = false
         isReleasedWhenClosed = false
         minSize = NSSize(width: 560, height: 360)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -46,9 +47,13 @@ final class ImageEditorWindow: NSWindow {
 
         let titleLabel = NSTextField(labelWithString: "\(title)  \(image.width) × \(image.height)")
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        titleLabel.frame = CGRect(x: 20, y: size.height - 36, width: size.width - 40, height: 20)
-        titleLabel.autoresizingMask = [.width, .minYMargin]
-        content.addSubview(titleLabel)
+        let titlebar = ImageEditorTitlebar(frame: CGRect(x: 0, y: size.height - 56, width: size.width, height: 56))
+        titlebar.autoresizingMask = [.width, .minYMargin]
+        titlebar.toolTip = "拖动标题栏移动窗口"
+        titleLabel.frame = CGRect(x: 20, y: 20, width: size.width - 40, height: 20)
+        titleLabel.autoresizingMask = [.width]
+        titlebar.addSubview(titleLabel)
+        content.addSubview(titlebar)
 
         scroll.frame = CGRect(x: 16, y: 16, width: size.width - 32, height: size.height - 72)
         scroll.autoresizingMask = [.width, .height]
@@ -113,6 +118,8 @@ final class ImageEditorWindow: NSWindow {
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         view.setFrameOrigin(.zero)
         panel.setContentSize(view.frame.size)
@@ -268,6 +275,20 @@ final class ImageEditorWindow: NSWindow {
     }
 }
 
+/// 背景拖动关闭后，保留明确的窗口移动区域，不与标注手势竞争。
+final class ImageEditorTitlebar: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
+
 /// 通过可视区域的原点居中窄图，保留画布坐标和导出尺寸。
 final class CenteredImageClipView: NSClipView {
     override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
@@ -302,6 +323,8 @@ final class ImageCanvasView: NSView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     var canUndo: Bool { marks.canUndo || textEditor != nil }
     var canRedo: Bool { marks.canRedo }
     var annotations: [Annotation] { marks.items }

@@ -227,6 +227,50 @@ final class LongShotTests: XCTestCase {
         assertImage(canvas.export(), equals: tall)
     }
 
+    @MainActor
+    func testEditorDrawAndMoveAfterScrollingKeepWindowAndControlsFixed() async throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main else { throw XCTSkip("需要原生显示器") }
+        let editor = ImageEditorWindow(image: image(), scale: 2, screen: screen, title: "标注手势回归")
+        defer { editor.closeEditor() }
+        editor.debugScroll(to: 800)
+        let canvas = editor.debugCanvas
+        func press(_ prefix: String) throws {
+            func buttons(in view: NSView) -> [NSButton] {
+                (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
+            }
+            let root = try XCTUnwrap(editor.debugToolbarPanel.contentView)
+            let button = try XCTUnwrap(buttons(in: root).first { $0.toolTip?.hasPrefix(prefix) == true })
+            XCTAssertTrue(button.isEnabled)
+            button.performClick(nil)
+        }
+        // AppKit 在分发 mouseDown 之前会查询这个属性；直接调用回调会漏掉窗口抢走手势的问题。
+        XCTAssertFalse(canvas.mouseDownCanMoveWindow)
+        XCTAssertFalse(editor.isMovableByWindowBackground)
+        XCTAssertFalse(editor.debugToolbarPanel.isMovable)
+        XCTAssertFalse(editor.debugOptionsPanel.isMovable)
+        try press("矩形")
+        XCTAssertEqual(canvas.tool, .rect)
+        let frame = editor.frame
+        let toolbarFrame = editor.debugToolbarPanel.frame
+        let optionsFrame = editor.debugOptionsPanel.frame
+        canvas.debugDrag([CGPoint(x: 30, y: 900), CGPoint(x: 160, y: 980)])
+        XCTAssertEqual(canvas.annotations.count, 1)
+        XCTAssertEqual(canvas.annotations.first?.bounds, CGRect(x: 30, y: 900, width: 130, height: 80))
+        try press("矩形")
+        XCTAssertEqual(canvas.tool, .none)
+        canvas.debugDrag([CGPoint(x: 30, y: 930), CGPoint(x: 70, y: 965)])
+        XCTAssertEqual(canvas.annotations.first?.bounds, CGRect(x: 70, y: 935, width: 130, height: 80))
+        XCTAssertEqual(editor.frame, frame)
+        XCTAssertEqual(editor.debugToolbarPanel.frame, toolbarFrame)
+        XCTAssertEqual(editor.debugOptionsPanel.frame, optionsFrame)
+        try press("撤销")
+        XCTAssertEqual(canvas.annotations.first?.bounds, CGRect(x: 30, y: 900, width: 130, height: 80))
+        try press("重做")
+        XCTAssertEqual(canvas.annotations.first?.bounds, CGRect(x: 70, y: 935, width: 130, height: 80))
+        XCTAssertEqual(canvas.export()?.height, 3200)
+    }
+
     func testAutoScrollWaitsForFirstFrameAndPausesCaptureStall() {
         var state = LongShotAutoScroll()
         state.begin(at: 100)

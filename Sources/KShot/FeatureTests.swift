@@ -257,6 +257,17 @@ enum FeatureTests {
         let w = ImageEditorWindow(image: img, scale: screen.backingScaleFactor, screen: screen, title: "长截图显示验证")
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // 留下真实窗口，验证 WindowServer 分发的点击/拖动，而非直接调用画布回调。
+        if CommandLine.arguments.contains("--interactive") {
+            Log.info("editor-interactive windows: canvas=\(w.windowNumber) toolbar=\(w.debugToolbarPanel.windowNumber) options=\(w.debugOptionsPanel.windowNumber)")
+            Log.info("editor-interactive frame=\(w.frame) toolbar=\(w.debugToolbarPanel.frame)")
+            let refresh = w.debugCanvas.onAnnotationsChanged
+            w.debugCanvas.onAnnotationsChanged = {
+                refresh?()
+                Log.info("editor-interactive tool=\(w.debugCanvas.tool) marks=\(w.debugCanvas.annotations.count) color=\(w.debugCanvas.color) frame=\(w.frame) toolbar=\(w.debugToolbarPanel.frame)")
+            }
+            return
+        }
         Task { @MainActor in
             for (index, y) in [CGFloat(0), 400, 1000, 0].enumerated() {
                 if index == 1 { w.setFrame(CGRect(origin: w.frame.origin, size: CGSize(width: 560, height: w.frame.height)), display: true) }
