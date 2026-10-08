@@ -742,6 +742,12 @@ final class AnnotationLayer {
         redoStack.removeAll()
     }
 
+    /// 最上层命中的标注是文字时，允许画布优先处理双击编辑。
+    func editableTextIndex(at p: CGPoint, tool: Tool) -> Int? {
+        guard let i = hitIndex(at: p, tool: tool), case .text = items[i].kind else { return nil }
+        return i
+    }
+
     private func hitIndex(at p: CGPoint, tool: Tool) -> Int? {
         items.indices.reversed().first { items[$0].hitTest(p) && (tool == .none || !items[$0].isAreaEffect) }
     }

@@ -364,6 +364,16 @@ final class OverlayView: NSView {
             return
         }
 
+        // 双击优先于把手、标注拖动和绘制；文字标注仍保留双击编辑。
+        if event.clickCount >= 2, sel.contains(p) {
+            if let i = marks.editableTextIndex(at: p, tool: tool) {
+                editText(at: i)
+            } else {
+                confirm()
+            }
+            return
+        }
+
         // 无工具时选区把手优先
         if tool == .none, marks.selected == nil, let h = handle(at: p, in: sel) {
             dragMode = .resizing(h, orig: sel)
@@ -386,12 +396,6 @@ final class OverlayView: NSView {
             return
         case .ignored:
             break
-        }
-
-        // 双击选区内：完成
-        if event.clickCount == 2, tool == .none, sel.contains(p) {
-            confirm()
-            return
         }
 
         if tool != .none { return }
