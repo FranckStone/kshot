@@ -1137,6 +1137,7 @@ final class SelfTest {
             t.add("fullscreen-select") { o.debugClick(at: CGPoint(x: 60, y: 300)) }
             return t
         }
+        t.add("click-window") { o.debugClick(at: c) }
         if CommandLine.arguments.contains("--loupe-test") {
             t.add("loupe-on") {
                 o.debugAction(.loupe)

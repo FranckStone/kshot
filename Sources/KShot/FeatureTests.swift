@@ -303,18 +303,31 @@ enum FeatureTests {
         let p = spec.split(separator: ",").compactMap { Double($0) }
         guard p.count == 4, let screen = NSScreen.main else { return }
         let rect = CGRect(x: p[0], y: p[1], width: p[2], height: p[3])
-        // 录一个会动的示例窗口
-        let demo = NSWindow(contentRect: screen.cocoaRect(fromLocal: rect), styleMask: .borderless, backing: .buffered, defer: false)
-        let label = NSTextField(labelWithString: "0")
-        label.font = .monospacedDigitSystemFont(ofSize: 80, weight: .bold)
-        label.frame = CGRect(x: 20, y: 20, width: rect.width - 40, height: 100)
-        demo.contentView?.addSubview(label)
-        demo.backgroundColor = .white
-        demo.level = .floating
-        demo.orderFrontRegardless()
-        var n = 0
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            MainActor.assumeIsolated { n += 1; label.stringValue = "\(n)" }
+        // 演示模式：铺一层示例桌面，便于生成不含隐私的录屏截图
+        let demoMode = CommandLine.arguments.contains("--demo")
+        if demoMode, let (shot, _) = DemoScene.make(for: screen) {
+            let bg = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            bg.isReleasedWhenClosed = false
+            let iv = NSImageView(frame: CGRect(origin: .zero, size: screen.frame.size))
+            iv.image = NSImage(cgImage: shot.image, size: screen.frame.size)
+            iv.imageScaling = .scaleAxesIndependently
+            bg.contentView = iv
+            bg.orderFrontRegardless()
+        }
+        // 录一个会动的示例窗口（演示模式直接录示例桌面）
+        if !demoMode {
+            let demo = NSWindow(contentRect: screen.cocoaRect(fromLocal: rect), styleMask: .borderless, backing: .buffered, defer: false)
+            let label = NSTextField(labelWithString: "0")
+            label.font = .monospacedDigitSystemFont(ofSize: 80, weight: .bold)
+            label.frame = CGRect(x: 20, y: 20, width: rect.width - 40, height: 100)
+            demo.contentView?.addSubview(label)
+            demo.backgroundColor = .white
+            demo.level = .floating
+            demo.orderFrontRegardless()
+            var n = 0
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                MainActor.assumeIsolated { n += 1; label.stringValue = "\(n)" }
+            }
         }
         guard let rec = ScreenRecorder.start(screen: screen, region: rect) else { return }
         rec.format = CommandLine.arguments.contains("--gif") ? .gif : .mp4

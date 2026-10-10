@@ -74,6 +74,21 @@ enum History {
         return CGImageSourceCreateImageAtIndex(src, 0, nil)
     }
 
+    /// 优先读取缓存；旧记录的缓存缺失或损坏时，从原图按需解码小图。
+    static func preview(_ item: Item) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 240,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        for url in [item.thumbURL, item.url] {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { continue }
+            return image
+        }
+        return nil
+    }
+
     private static func prune(limit: Int) {
         for item in items().dropFirst(limit) {
             try? FileManager.default.removeItem(at: item.url)
@@ -116,12 +131,23 @@ final class HistoryMenu: NSObject, NSMenuDelegate {
             let mi = NSMenuItem(title: title, action: #selector(copyItem(_:)), keyEquivalent: "")
             mi.target = self
             mi.tag = i
-            mi.toolTip = "单击复制；子菜单里可以钉住、编辑、在 Finder 中显示"
-            if let thumb = NSImage(contentsOf: item.thumbURL) {
-                let h: CGFloat = 36
-                let w = min(72, max(24, thumb.size.width / max(1, thumb.size.height) * h))
-                thumb.size = NSSize(width: w, height: h)
-                mi.image = thumb
+            mi.toolTip = "展开子菜单可复制、钉住、编辑或在 Finder 中显示"
+            if let preview = History.preview(item) {
+                let size = NSSize(width: 96, height: 60)
+                let thumb = NSImage(cgImage: preview, size: .zero)
+                let scale = min(size.width / CGFloat(preview.width), size.height / CGFloat(preview.height))
+                let fitted = NSSize(width: CGFloat(preview.width) * scale, height: CGFloat(preview.height) * scale)
+                // 固定预览区域，完整显示横图、竖图和长截图，避免拉伸。
+                mi.image = NSImage(size: size, flipped: false) { bounds in
+                    let rect = NSRect(x: bounds.midX - fitted.width / 2, y: bounds.midY - fitted.height / 2,
+                                      width: fitted.width, height: fitted.height)
+                    thumb.draw(in: rect)
+                    return true
+                }
+                // macOS 27 默认隐藏菜单图片；截图预览需要始终可见。
+                if #available(macOS 27.0, *) {
+                    mi.preferredImageVisibility = .visible
+                }
             }
             let sub = NSMenu()
             func add(_ t: String, _ sel: Selector) {
