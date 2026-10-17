@@ -1,6 +1,6 @@
 # 第三方版权声明
 
-KShot 自身代码使用根目录的 [MIT License](LICENSE)。以下第三方代码及依赖保留各自的许可证。
+KShot 自身代码当前使用根目录的 [PolyForm Noncommercial License 1.0.0](LICENSE)，仅限许可证允许的非商业用途；版权声明见 [NOTICE](NOTICE)。以下第三方代码及依赖保留各自的许可证，本项目的非商业限制不改变这些第三方代码本身的许可。
 
 ## ScrollSnap
 
@@ -40,4 +40,4 @@ SOFTWARE.
 
 Sparkle 使用 MIT 许可证，并在其 `LICENSE` 中包含所使用组件的版权及许可条款。`build.sh` 将下载产物中的完整许可证原样复制到 `KShot.app/Contents/Resources/Sparkle-LICENSE.txt`；同时保留框架内自带的版权声明。
 
-KShot 的许可证与本文件也会复制到应用的 `Contents/Resources` 目录，随安装包分发。
+KShot 的许可证、`NOTICE` 与本文件也会复制到应用的 `Contents/Resources` 目录，随安装包分发。

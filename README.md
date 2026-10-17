@@ -7,11 +7,13 @@
 <p align="center">菜单栏常驻的截图小工具：全屏冻结、自动识别窗口、拖拽选区、放大镜取色、标注、美化、长截图、录屏、OCR / 二维码、自动打码、钉图。</p>
 
 <p align="center">
-  <a href="LICENSE">MIT 开源协议</a> ·
+  <a href="LICENSE">仅限非商业用途</a> ·
   <a href="https://kshot.org">官网</a> ·
   <a href="https://github.com/FranckStone/kshot/releases/latest">下载</a> ·
   <a href="CONTRIBUTING.md">参与贡献</a>
 </p>
+
+**源码公开，仅限非商业用途。** KShot 当前采用 [PolyForm Noncommercial 1.0.0](LICENSE)，不授予商业使用权。允许的使用、修改和再分发范围以许可证全文为准。
 
 ## 截图
 
@@ -220,6 +222,10 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 - 长截图的帧间位移估计（Vision 平移配准 + 横带多数投票）移植自 [ScrollSnap](https://github.com/Brkgng/ScrollSnap)（MIT License）。
 - 应用内更新使用 [Sparkle](https://github.com/sparkle-project/Sparkle)。完整第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## 开源协议
+## 使用许可
 
-KShot 使用 [MIT License](LICENSE)，允许使用、修改和再分发，包括商业用途；分发时请保留许可证及第三方版权声明。
+KShot 当前采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，仅限许可证允许的非商业用途，不授予商业使用权。分发时请保留许可证、[NOTICE](NOTICE) 及[第三方版权声明](THIRD_PARTY_NOTICES.md)。第三方组件仍适用其各自许可证。
+
+该协议含非商业使用限制，因此本项目属于“源码公开（source-available）”，不属于 [OSI 定义的开源软件](https://opensource.org/osd)。
+
+2026 年 10 月 17 日起，本仓库从本次许可证变更提交开始按上述协议发布。此前的提交 [`bd0dacc`](https://github.com/FranckStone/kshot/commit/bd0dacc55443a001723dd2fdb55180760456a32e) 曾按 MIT 协议公开；本次变更不追溯撤回已按 MIT 授出的许可，也不为这些历史副本增加非商业限制。
