@@ -3,3 +3,14 @@ build/
 *.xcodeproj
 .DS_Store
 .wrangler/
+.swiftpm/
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision

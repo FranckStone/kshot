@@ -6,6 +6,13 @@
 
 <p align="center">菜单栏常驻的截图小工具：全屏冻结、自动识别窗口、拖拽选区、放大镜取色、标注、美化、长截图、录屏、OCR / 二维码、自动打码、钉图。</p>
 
+<p align="center">
+  <a href="LICENSE">MIT 开源协议</a> ·
+  <a href="https://kshot.org">官网</a> ·
+  <a href="https://github.com/FranckStone/kshot/releases/latest">下载</a> ·
+  <a href="CONTRIBUTING.md">参与贡献</a>
+</p>
+
 ## 截图
 
 界面上的浮层（工具条、粗细 / 颜色面板、尺寸标签、文字输入框、悬停边框、把手、钉住窗口）均为 macOS 26 的 Liquid Glass 液态玻璃风格，旧系统自动回退为毛玻璃。
@@ -97,9 +104,20 @@
 ./build.sh        # 只编译打包
 ```
 
-要求：macOS 14+、Xcode 命令行工具（Swift 5.9+）。首次启动会请求 **屏幕录制** 权限，
+运行要求 macOS 14+。构建当前源码需要包含 **macOS 27 SDK** 的 Xcode / Command Line Tools（源码使用了该 SDK 的 API），可用 `xcrun --sdk macosx --show-sdk-version` 检查。首次启动会请求 **屏幕录制** 权限，
 在「系统设置 › 隐私与安全性 › 录屏与系统录音」中勾选 KShot 后重新启动即可（KShot 设置 › 权限 里可以查看状态、跳转系统设置并一键重启）。
 `build.sh` 会优先用本机的 Apple Development 证书签名，这样重新编译后权限不会失效。
+没有开发证书时会使用 ad-hoc 签名；普通构建不需要官方更新签名私钥。
+
+克隆源码与运行测试：
+
+```bash
+git clone https://github.com/FranckStone/kshot.git
+cd kshot
+swift test
+```
+
+贡献流程与独立发布说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 使用
 
@@ -200,3 +218,8 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 ## 致谢
 
 - 长截图的帧间位移估计（Vision 平移配准 + 横带多数投票）移植自 [ScrollSnap](https://github.com/Brkgng/ScrollSnap)（MIT License）。
+- 应用内更新使用 [Sparkle](https://github.com/sparkle-project/Sparkle)。完整第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 开源协议
+
+KShot 使用 [MIT License](LICENSE)，允许使用、修改和再分发，包括商业用途；分发时请保留许可证及第三方版权声明。
