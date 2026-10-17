@@ -532,8 +532,7 @@ final class OverlayView: NSView {
             case .confirm: target.confirm()
             case .pin: target.pin()
             case .longShot: target.longShot()
-            case .ocr: target.recognizeText()
-            case .translate: target.recognizeText(thenTranslate: true)
+            case .ocr, .translate: target.recognizeText()
             case .recordRegion: target.record()
             case .beautify: target.beautify()
             case .redact: target.redact()
@@ -763,8 +762,7 @@ final class OverlayView: NSView {
         case .longShot: longShot()
         case .record: record()
         case .beautify: beautify()
-        case .ocr: recognizeText()
-        case .translate: recognizeText(thenTranslate: true)
+        case .recognize: recognizeText()
         case .redact: redact()
         case .loupe:
             commitText()
@@ -954,13 +952,13 @@ final class OverlayView: NSView {
     }
 
     /// 提取选区内的文字（用原始截图，不含标注）
-    private func recognizeText(thenTranslate: Bool = false) {
+    private func recognizeText() {
         commitText()
         guard let sel = selection,
               let img = Exporter.render(shot: shot, selection: sel, annotations: [], renderer: renderer) else { return }
         let frame = screen.cocoaRect(fromLocal: sel)
         session.end(restoreFocus: false)
-        OCRResultWindow.present(image: img, near: frame, translate: thenTranslate)
+        OCRResultWindow.present(image: img, near: frame, translate: true)
     }
 
     /// 长截图：隐藏遮罩后对选区自动滚动并拼接
@@ -1260,7 +1258,7 @@ final class SelfTest {
             let translate = CommandLine.arguments.contains("--translate-test")
             t.add(translate ? "translate" : "ocr") {
                 if CommandLine.arguments.contains("--demo") { SelfTest.showDemoBackdrop(for: o) }
-                o.debugAction(translate ? .translate : .ocr)
+                o.debugAction(.recognize)
                 let url = t.dir.appendingPathComponent("screen.png")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
                     Task { @MainActor in

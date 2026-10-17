@@ -18,9 +18,9 @@ swift test
 open build/KShot.app
 ```
 
-Swift Package Manager 会下载固定版本的 Sparkle。普通构建不需要维护者的证书或更新签名私钥：`build.sh` 在有 Apple Development 证书时使用该证书，否则使用 ad-hoc 签名。首次运行需授予屏幕录制权限；翻译需 macOS 15+，液态玻璃效果需 macOS 26+。
+Swift Package Manager 会下载固定版本的 Sparkle。普通构建不需要维护者的证书或更新签名私钥：`build.sh` 在有 Apple Development 证书时使用该证书，否则使用 ad-hoc 签名。首次运行需授予屏幕录制权限；Apple 系统离线翻译需 macOS 15+，DeepSeek / Ollama 支持 macOS 14+，液态玻璃效果需 macOS 26+。
 
-`swift test` 覆盖长截图拼接与帧处理。涉及截图交互的修改，请按 README 的调试参数手动验证，并在 PR 中说明系统 / SDK 版本、复现步骤和验证结果。提交截图前请使用 `--demo` 或确认画面不含个人信息。
+`swift test` 覆盖长截图拼接、帧处理、翻译引擎请求、流式接收与原文格式保留。涉及截图交互的修改，请按 README 的调试参数手动验证，并在 PR 中说明系统 / SDK 版本、复现步骤和验证结果。提交截图前请使用 `--demo` 或确认画面不含个人信息。
 
 ## 提交修改
 

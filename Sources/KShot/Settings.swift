@@ -112,8 +112,8 @@ enum ShortcutAction: String, CaseIterable {
         case .longShot: return "长截图"
         case .recordRegion: return "录制选区"
         case .beautify: return "美化"
-        case .ocr: return "提取文字 / 二维码"
-        case .translate: return "翻译"
+        case .ocr: return "识别与翻译（文字 / 二维码）"
+        case .translate: return "识别与翻译（备用快捷键）"
         case .redact: return "自动打码"
         case .undo: return "撤销"
         case .redo: return "重做"
@@ -221,6 +221,38 @@ enum Settings {
     static func resetAllShortcuts() {
         for a in ShortcutAction.allCases { setShortcut(a, a.defaultCombo, notify: false) }
         notify()
+    }
+
+    /// nil 表示沿用自动选择：中文译英，其他译中。
+    static var translationTarget: TargetLanguage? {
+        get {
+            let identifier = d.string(forKey: "translationTarget")
+            return TargetLanguage.all.first { $0.identifier == identifier }
+        }
+        set {
+            if let newValue { d.set(newValue.identifier, forKey: "translationTarget") }
+            else { d.removeObject(forKey: "translationTarget") }
+            notify()
+        }
+    }
+
+    static var translationProvider: TranslationProvider {
+        get { TranslationProvider(rawValue: d.string(forKey: "translationProvider") ?? "") ?? .system }
+        set { d.set(newValue.rawValue, forKey: "translationProvider"); notify() }
+    }
+
+    static func aiTranslationURL(for provider: TranslationProvider) -> String {
+        d.string(forKey: "translation.\(provider.rawValue).url") ?? provider.defaultURL
+    }
+
+    static func aiTranslationModel(for provider: TranslationProvider) -> String {
+        d.string(forKey: "translation.\(provider.rawValue).model") ?? provider.defaultModel
+    }
+
+    static func saveAITranslation(provider: TranslationProvider, url: String, model: String) {
+        d.set(url.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "translation.\(provider.rawValue).url")
+        d.set(model.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "translation.\(provider.rawValue).model")
+        translationProvider = provider
     }
 
     /// 默认保存目录

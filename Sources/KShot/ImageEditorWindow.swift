@@ -185,10 +185,8 @@ final class ImageEditorWindow: NSWindow {
             runRedact()
         case .cancel:
             closeEditor()
-        case .ocr:
-            runOCR(translate: false)
-        case .translate:
-            runOCR(translate: true)
+        case .recognize:
+            runOCR()
         case .pin, .longShot, .record, .loupe:
             break
         }
@@ -215,8 +213,8 @@ final class ImageEditorWindow: NSWindow {
         }
     }
 
-    private func runOCR(translate: Bool) {
-        OCRResultWindow.present(image: canvas.image, near: frame, translate: translate)
+    private func runOCR() {
+        OCRResultWindow.present(image: canvas.image, near: frame, translate: true)
     }
 
     func closeEditor() {
@@ -249,8 +247,7 @@ final class ImageEditorWindow: NSWindow {
         case .redo: canvas.redo(); return
         case .save: handle(.save); return
         case .confirm: handle(.confirm); return
-        case .ocr: handle(.ocr); return
-        case .translate: handle(.translate); return
+        case .ocr, .translate: handle(.recognize); return
         case .beautify: handle(.beautify); return
         case .redact: handle(.redact); return
         default: break

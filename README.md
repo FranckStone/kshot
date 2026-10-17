@@ -55,7 +55,7 @@
 
 ![长截图](docs/screenshot-longshot-full.png)
 
-“提取文字”用系统 Vision 做中英文 OCR，结果自动复制到剪贴板，窗口里可以继续编辑；“翻译”在此基础上调用系统 Translation 框架离线翻译，译文显示在下方面板：
+工具条只有一个“识别与翻译”入口：同时提取文字、识别二维码，有文字时按默认语言和设置中选用的引擎翻译，支持 Apple 离线翻译、DeepSeek 和 Ollama。原文自动复制到剪贴板，窗口里可以继续编辑；纯二维码只显示识别内容，不自动翻译链接。原文与译文在可调整大小的双栏窗口中对照显示，可分别编辑、复制；原文顶部可选择“自动检测”或指定语言，自动检测会过滤网址、邮箱和编号的干扰，按行识别并翻译中英日等混合段落，目标语言段落和纯技术内容保留原样，并显示检测到的语言；证据不足时可直接指定后重试；窗口内可直接切换 Apple / DeepSeek / Ollama，引擎旁的模型框支持选择服务返回的可用模型或输入名称，点击刷新可重新读取模型列表；切换引擎或模型会停止旧请求并重新翻译，并记住为新窗口的默认选择。每个已打开窗口独立保留自己的选择。顶部切换目标语言后自动重新翻译，`⌘↩` 手动翻译，`Esc` 关闭：
 
 ![提取文字](docs/screenshot-ocr.png)
 
@@ -67,13 +67,14 @@
 - **截取上次区域**（`⌃⇧⌘A`）和 **延时截图**（菜单 › 延时截图 › 3 / 5 / 10 秒）。
 - **美化**（`⌘B`）：渐变 / 纯色 / 透明背景、内边距、圆角、阴影，一键复制或保存。
 - **窗口阴影**：设置里打开后，单击选中窗口直接完成，会输出带系统阴影、背景透明的窗口图。
-- **二维码识别**：“提取文字”同时识别二维码，链接可一键打开。
+- **二维码识别**：统一的“识别与翻译”按钮同时识别二维码，链接可一键打开或复制。
 - **自动打码**（`⌘E`）：OCR 找出手机号、邮箱、身份证号、银行卡号、API Key / 令牌，自动盖上马赛克，可撤销。
 - **截图历史**：菜单栏 › 最近截图，可复制、钉住、再编辑、在 Finder 中显示。
 - **录屏**（`⌘R` 或全局 `⌃⌘R`）：录制选区为 MP4，或导出 GIF；文件存到默认目录并复制到剪贴板。
 - **钉图增强**：`⌥` 滚轮或右键调透明度、鼠标穿透、`⌥` 拖动把图片拖到其他应用、右键再编辑；菜单栏 › 钉图 可一键隐藏 / 显示 / 关闭全部。
-- **设置**（菜单 › 设置… `⌘,`）：玻璃侧栏 + 分组卡片的设置窗口，分「通用 / 权限 / 保存 / 快捷键 / 历史 / 关于」六页：放大镜、快门声、窗口阴影、录屏指针、开机自启（菜单栏不再单独放开关）；屏幕录制（必需）与辅助功能（长截图自动滚动，可选）的授权状态、跳转系统设置、授权后一键重启；默认保存目录、文件名模板（`{date}` `{time}` `{w}` `{h}`，可一键插入）、PNG / JPEG / HEIC、保存免弹窗、完成时自动保存；历史保留数量与清空。
-- **快捷键设置**（设置 › 快捷键）：全局快捷键（截图、截取上次区域、延时 5 秒截图、录屏、显示 / 隐藏钉图）和截图时的快捷键（完成、保存、钉图、长截图、录屏、美化、提取文字、翻译、自动打码、撤销、重做）都可以自定义；点击后按下新组合键，`⌫` 清除，单项或全部恢复默认，冲突的组合会标红提示。
+- **设置**（菜单 › 设置… `⌘,`）：玻璃侧栏 + 分组卡片的设置窗口，分「通用 / 权限 / 保存 / 翻译 / 快捷键 / 历史 / 关于」七页：放大镜、快门声、窗口阴影、录屏指针、开机自启（菜单栏不再单独放开关）；屏幕录制（必需）与辅助功能（长截图自动滚动，可选）的授权状态、跳转系统设置、授权后一键重启；默认保存目录、文件名模板（`{date}` `{time}` `{w}` `{h}`，可一键插入）、PNG / JPEG / HEIC、保存免弹窗、完成时自动保存；历史保留数量与清空。
+- **翻译设置**（设置 › 翻译）：可指定默认目标语言，或沿用自动选择（中文译英、其他译中）；可选 Apple 系统翻译、DeepSeek 或 Ollama。DeepSeek 配置 HTTPS 服务地址、模型和 API Key（存于系统钥匙串），原文发送到所配置服务并按 API 用量计费；Ollama 配置服务地址和模型，支持读取已安装模型，默认地址 `http://localhost:11434`。AI 引擎由模型判断原文语言，程序按原文行保留换行、连续空行、缩进、列表编号和项目符号，避免模型重排段落；Apple 系统翻译也保留这些结构。DeepSeek（SSE）和 Ollama（逐行 JSON）流式接收译文，边生成边显示，可在生成中复制已显示的文字、点击“停止翻译”保留未完成内容并重试。连接中断也保留已生成文字并标明未完成；支持手动指定原文语言、二维码内容保护。Apple 系统翻译仍在完成后显示结果。测试连接仅发送示例 Hello，修改后点击“保存并启用”，不自动切换其他服务。接口参考 [DeepSeek 官方文档](https://api-docs.deepseek.com/) 与 [Ollama 官方文档](https://docs.ollama.com/api/chat)。Apple 引擎可选择原文和目标语言后查看离线翻译包状态，点击“下载翻译包”后在系统弹窗中下载所需语言，再点“完成”；也可点“管理翻译语言…”前往系统设置的“语言与地区 › 翻译语言”下载。下载就绪后可离线翻译（macOS 15+）。
+- **快捷键设置**（设置 › 快捷键）：全局快捷键（截图、截取上次区域、延时 5 秒截图、录屏、显示 / 隐藏钉图）和截图时的快捷键（完成、保存、钉图、长截图、录屏、美化、识别与翻译、自动打码、撤销、重做）都可以自定义；点击后按下新组合键，`⌫` 清除，单项或全部恢复默认，冲突的组合会标红提示。
 
 ## 下载与安装
 
@@ -134,7 +135,7 @@ swift test
 | 拖拽 | 自由框选 |
 | 拖动选区 / 拖动 8 个把手 | 移动 / 调整选区 |
 | 方向键（+⇧ 大步） | 微调选区位置；选中标注时移动标注 |
-| 工具条 | 矩形、椭圆、直线、箭头、画笔、荧光笔、马赛克、模糊、文字、序号 ｜ 撤销、重做 ｜ 钉在屏幕上、长截图、录屏、美化、保存 ｜ 提取文字 / 二维码、翻译、自动打码 ｜ 取消、完成 |
+| 工具条 | 矩形、椭圆、直线、箭头、画笔、荧光笔、马赛克、模糊、文字、序号 ｜ 撤销、重做 ｜ 钉在屏幕上、长截图、录屏、美化、保存 ｜ 识别与翻译（文字 / 二维码）、自动打码 ｜ 取消、完成 |
 | 点击已有标注 | 选中：拖动移动，拖把手缩放，选项面板改颜色 / 粗细，`Delete` 删除；双击文字重新编辑 |
 | 选项面板 | 选工具后出现：三档粗细/字号 + 8 色 |
 | 文字工具 | 在选区内点击输入；点击别处、Esc 或 ⌘⏎ 结束 |
@@ -142,8 +143,7 @@ swift test
 | `⌘S` | 保存为 PNG |
 | `⌘P` | 钉在屏幕上（悬浮图片：拖动移动、滚轮缩放、双击或 Esc 关闭、右键菜单） |
 | `⌘K` | 长截图（滚动截图）：你用触控板或滚轮在选区内正常向下滚动，程序持续抓帧并实时拼接，红色边框标明捕获范围，面板里实时展示完整的已拼接长图（每次成功拼接即刷新）；往回滚不会重复，滚太快会提示往回一点。处理来不及时只保留最新帧，完成、取消及模式切换不会同步等待拼接队列。面板上的“自动滚动”可选（需要“辅助功能”权限），画面持续不变或捕获停顿时暂停，保留当前截图，可继续滚动或重试。回车完成后进入图片编辑窗口，可继续标注、提取文字、翻译，再复制或保存 |
-| `⌘T` | 提取文字：对选区做中英文 OCR 并识别二维码，结果自动复制到剪贴板并弹出可编辑的结果窗口（二维码是链接时可直接打开） |
-| `⌘L` | 翻译：识别选区文字后用系统翻译译成所选语言（中文译英、其他译中，可在结果窗口切换目标语言；macOS 15+，首次需按系统提示下载语言包） |
+| `⌘T` / `⌘L` | 识别与翻译：同时提取选区文字、识别二维码，并按默认语言翻译。原文自动复制，原文和译文可分别编辑、复制，二维码链接可直接打开。纯二维码不自动翻译；Apple 离线翻译需 macOS 15+；DeepSeek / Ollama 和文字、二维码识别支持 macOS 14+ |
 | `⌘Z` / `⇧⌘Z` | 撤销 / 重做 |
 | `⌘B` | 美化（背景、内边距、圆角、阴影） |
 | `⌘E` | 自动打码 |
@@ -165,8 +165,8 @@ open build/KShot.app --args --shoot --dump       # 每秒把遮罩渲染到 ~/Li
 open build/KShot.app --args --shoot --demo --selftest   # 用绘制的示例桌面代替真实抓屏，生成不含隐私的演示截图
 open build/KShot.app --args --shoot --demo --selftest --pause-at 18   # 停在第 18 步并用 ScreenCaptureKit 抓一张真实合成的屏幕（含玻璃效果）
 open build/KShot.app --args --shoot --demo --selftest --pin-test      # 最后一步改为“钉住”并抓屏
-open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后一步改为“提取文字”并抓屏
-open build/KShot.app --args --shoot --demo --selftest --translate-test   # 最后一步改为“翻译”并抓屏
+open build/KShot.app --args --shoot --demo --selftest --ocr-test      # 最后一步使用“识别与翻译”并抓屏
+open build/KShot.app --args --shoot --demo --selftest --translate-test   # 同一“识别与翻译”入口，并记录译文
 open build/KShot.app --args --longshot-demo      # 弹一个可滚动的示例窗口并对它跑完整长截图流程（自动滚动），结果存到 ~/Library/Logs/KShot-selftest/longshot.png
 open build/KShot.app --args --longshot-demo --manual   # 同上，但由示例窗口模拟人手滚动（步长不一、会往回滚），验证手动模式
 open build/KShot.app --args --stitch-test        # 用合成长图验证拼接算法的像素精度
@@ -176,6 +176,16 @@ open build/KShot.app --args --beautify-test      # 美化：输出渐变 / 透�
 open build/KShot.app --args --editor-test        # 图片编辑窗口：新工具、选中拖动、撤销重做
 open build/KShot.app --args --editor-image /path/to/long.png   # 用真实长图验证编辑器顶部、中部、底部及回滚后的显示，输出到自测日志目录
 open build/KShot.app --args --prefs-test         # 快捷键存取 / 匹配自测 + 设置窗口各页截图（真实窗口抓图，含玻璃效果；加 --fake-no-permission 看未授权状态）
+open build/KShot.app --args --recognition-test           # 验证文字+二维码自动翻译，以及纯二维码不翻译
+open build/KShot.app --args --translation-auto-test      # 短词、混合语言、相同目标语言、纯技术内容与简繁体转换
+open build/KShot.app --args --translation-layout-test     # 实测 AI / Apple 换行、空行、缩进和列表结构
+open build/KShot.app --args --translation-engine-window-test # 窗口内引擎/模型切换、记忆及窄窗口检查
+open build/KShot.app --args --translation-stream-test      # 当前 AI 引擎实测边生成边显示、停止及重试
+open build/KShot.app --args --translation-ai-settings-test # AI 设置界面；加 --ai-model 名称可测本机 Ollama
+open build/KShot.app --args --translation-source-test    # 指定原文语言，验证极短文本的真实翻译
+open build/KShot.app --args --translation-window-test    # 真实翻译、二维码操作、窄窗口与深色模式截图
+open build/KShot.app --args --translation-prepare-test   # 用已安装的中英语言包验证真实翻译会话
+open build/KShot.app --args --translation-download-test  # 验证未安装语言的系统下载弹窗并截图，不自动确认下载
 open build/KShot.app --args --history-test       # 截图历史与菜单
 open build/KShot.app --args --gif-test           # 用合成帧写 MP4（与录屏同参数）再转 GIF
 open build/KShot.app --args --record-test x,y,w,h [--gif]   # 录制主屏指定区域 3 秒（需要屏幕未锁定）
@@ -210,7 +220,8 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 - `Exporter.swift` 裁剪合成、剪贴板、保存
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
-- `Translator.swift` 基于系统 Translation 框架的翻译器（通过隐藏的 SwiftUI 宿主视图驱动）
+- `Translator.swift` 翻译引擎路由与系统 Translation 框架宿主
+- `AITranslator.swift` / `AITranslationStream.swift` / `TranslationTextLayout.swift` / `AITranslationSettings.swift` DeepSeek、Ollama 流式客户端、钥匙串与引擎配置
 - `LongScreenshot.swift` / `RegionStream.swift` / `ImageStitcher.swift` / `VisionOffsetEstimator.swift` 长截图：SCStream 60fps 区域捕获、实时预览面板、可选自动滚动；帧间位移用 Vision 平移配准做 5 横带多数投票（移植自 [ScrollSnap](https://github.com/Brkgng/ScrollSnap)，MIT），再用行签名精修到整像素，自动识别固定顶栏/底栏，支持往回滚
 - `ImageEditorWindow.swift` 图片编辑窗口（长截图完成后的标注画布，复用工具条与标注渲染）
 - `MenuBarIcon.swift` 菜单栏模板图标

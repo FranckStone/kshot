@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class PreferencesWindow: NSWindow {
     enum Tab: String, CaseIterable, Identifiable {
-        case general, permissions, save, shortcuts, history, about
+        case general, permissions, save, translation, shortcuts, history, about
         var id: Self { self }
 
         var title: String {
@@ -14,6 +14,7 @@ final class PreferencesWindow: NSWindow {
             case .general: return "通用"
             case .permissions: return "权限"
             case .save: return "保存"
+            case .translation: return "翻译"
             case .shortcuts: return "快捷键"
             case .history: return "历史"
             case .about: return "关于"
@@ -25,6 +26,7 @@ final class PreferencesWindow: NSWindow {
             case .general: return "截图、录屏与启动时的行为。"
             case .permissions: return "KShot 需要的系统权限。修改后回到这里即可看到最新状态。"
             case .save: return "截图保存到哪里、叫什么名字、用什么格式。"
+            case .translation: return "选择翻译引擎、默认语言，或管理离线翻译包。"
             case .shortcuts: return "点击快捷键后按下新的组合键即可修改。"
             case .history: return "最近的截图会保留在菜单栏里，随时复制、钉图或再编辑。"
             case .about: return "轻量的 macOS 截图工具。"
@@ -36,6 +38,7 @@ final class PreferencesWindow: NSWindow {
             case .general: return "gearshape.fill"
             case .permissions: return "hand.raised.fill"
             case .save: return "folder.fill"
+            case .translation: return "character.bubble.fill"
             case .shortcuts: return "command"
             case .history: return "clock.fill"
             case .about: return "info"
@@ -47,6 +50,7 @@ final class PreferencesWindow: NSWindow {
             case .general: return Color(white: 0.55)
             case .permissions: return .blue
             case .save: return .green
+            case .translation: return .purple
             case .shortcuts: return .indigo
             case .history: return .orange
             case .about: return .teal
@@ -61,6 +65,9 @@ final class PreferencesWindow: NSWindow {
         let w = shared ?? PreferencesWindow()
         shared = w
         if let tab { w.model.page = tab }
+        if !w.isVisible, w.model.page == .translation {
+            w.model.translation.ai.reloadSavedConfiguration()
+        }
         w.model.refresh()
         if !w.isVisible { w.center() }
         w.makeKeyAndOrderFront(nil)
@@ -94,6 +101,7 @@ final class PreferencesWindow: NSWindow {
 
 @MainActor
 final class PrefsModel: ObservableObject {
+    let translation = TranslationSettingsModel()
     @Published var page: PreferencesWindow.Tab = .general
     @Published private(set) var recording: ShortcutAction?
     private var monitor: Any?
@@ -219,6 +227,7 @@ private struct SettingsView: View {
                     case .general: GeneralPage(model: model)
                     case .permissions: PermissionsPage(model: model)
                     case .save: SavePage(model: model, window: window)
+                    case .translation: TranslationPage(prefs: model, model: model.translation)
                     case .shortcuts: ShortcutsPage(model: model)
                     case .history: HistoryPage(model: model)
                     case .about: AboutPage()
@@ -232,6 +241,8 @@ private struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.groupedBackground)
+        // 挂在设置窗口的根视图上，切换页面也不会移除下载任务。
+        .translationSession(using: model.translation.translator)
         .ignoresSafeArea()
         .onChange(of: model.page) { _, _ in
             // 不让文件名输入框自动获得焦点，避免误输入
@@ -430,6 +441,216 @@ private struct ToggleRow: View {
             Toggle("", isOn: $isOn)
                 .toggleStyle(.switch)
                 .labelsHidden()
+        }
+    }
+}
+
+// MARK: - 翻译
+
+@MainActor
+final class TranslationSettingsModel: ObservableObject {
+    let translator = Translator()
+    let ai = AITranslationSettings()
+    @Published var source = Settings.translationTarget == TargetLanguage.all[2] ? TargetLanguage.all[0] : TargetLanguage.all[2] {
+        didSet { availability = nil; message = nil }
+    }
+    @Published var target = Settings.translationTarget ?? TargetLanguage.all[0] {
+        didSet { availability = nil; message = nil }
+    }
+    @Published private(set) var availability: TranslationAvailability?
+    @Published private(set) var preparing = false
+    @Published private(set) var message: String?
+
+    var pairID: String { source.identifier + ":" + target.identifier }
+
+    var status: String {
+        if source == target { return "请选择不同的语言" }
+        if preparing { return "请在系统弹窗中下载语言包，然后点“完成”" }
+        switch availability {
+        case .installed: return "已下载，可离线翻译"
+        case .supported: return "尚未就绪，需下载翻译包"
+        case .unsupported: return "系统暂不支持此语言组合"
+        case nil: return "正在检查…"
+        }
+    }
+
+    func refreshStatus() async {
+        let pair = pairID
+        let result = await Translator.availability(from: source, to: target)
+        guard !Task.isCancelled, pair == pairID else { return }
+        availability = result
+    }
+
+    func download() {
+        guard !preparing, availability == .supported, source != target else { return }
+        preparing = true
+        message = "正在打开系统下载提示。若未出现，可点击下方“管理翻译语言…”手动下载。"
+        translator.prepare(from: source, to: target) { [weak self] result in
+            guard let self else { return }
+            self.preparing = false
+            switch result {
+            case .success:
+                self.message = "系统下载提示已关闭。如已确认下载，语言包会在后台继续下载，就绪后状态会自动更新。"
+            case .failure(let error):
+                self.message = "未能下载：\(error.localizedDescription)"
+            }
+            Task { await self.refreshStatus() }
+        }
+    }
+}
+
+private struct TranslationPage: View {
+    @ObservedObject var prefs: PrefsModel
+    @ObservedObject var model: TranslationSettingsModel
+
+    var body: some View {
+        Page {
+            PageHeader(tab: .translation)
+            TranslationEngineCard(model: model.ai)
+            Card(header: "默认语言", footer: "新打开的文字识别和翻译窗口使用此语言，仍可在结果窗口临时切换。") {
+                Row(title: "默认目标语言", divider: false) {
+                    Picker("默认目标语言", selection: prefs.bind(
+                        { Settings.translationTarget?.identifier ?? "auto" },
+                        { id in Settings.translationTarget = TargetLanguage.all.first { $0.identifier == id } })) {
+                        Text("自动（中文译英，其他译中）").tag("auto")
+                        ForEach(TargetLanguage.all, id: \.identifier) { language in
+                            Text(language.title).tag(language.identifier)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+            }
+            if Translator.isSystemAvailable {
+                Card(header: "Apple 离线翻译包", footer: "仅 Apple 系统翻译需要语言包。下载需要联网并按系统提示确认，语言包由 macOS 管理。DeepSeek 和 Ollama 无需下载此处的翻译包。") {
+                    Row(title: "原文语言") {
+                        languagePicker("原文语言", selection: $model.source)
+                    }
+                    Row(title: "目标语言") {
+                        languagePicker("目标语言", selection: $model.target)
+                    }
+                    Row(title: "翻译包状态", detail: model.status) {
+                        if model.preparing {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button(model.availability == .installed ? "已下载" : "下载翻译包") {
+                            model.download()
+                        }
+                        .disabled(model.preparing || model.availability != .supported)
+                    }
+                    if let message = model.message {
+                        Row(title: "下载提示", detail: message) { EmptyView() }
+                    }
+                    Row(title: "系统翻译语言", detail: "也可在系统设置的“语言与地区 › 翻译语言”中下载", divider: false) {
+                        Button("管理翻译语言…") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")!)
+                        }
+                    }
+                }
+            } else {
+                Card {
+                    Row(title: "当前系统不支持离线翻译", detail: "Apple 系统翻译需要 macOS 15 或更高版本，也可选用 DeepSeek 或 Ollama。", divider: false) {
+                        Image(systemName: "info.circle").foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .task(id: model.pairID) {
+            guard Translator.isSystemAvailable else { return }
+            // prepareTranslation 可能在后台下载完成前返回，实际状态以系统查询为准。
+            while !Task.isCancelled {
+                if NSApp.windows.contains(where: { $0 is PreferencesWindow && $0.isVisible }) {
+                    await model.refreshStatus()
+                }
+                do { try await Task.sleep(for: .seconds(3)) }
+                catch { return }
+            }
+        }
+    }
+
+    private func languagePicker(_ title: String, selection: Binding<TargetLanguage>) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(TargetLanguage.all, id: \.identifier) { language in
+                Text(language.title).tag(language)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 160)
+        .disabled(model.preparing)
+    }
+}
+
+private struct TranslationEngineCard: View {
+    @ObservedObject var model: AITranslationSettings
+
+    var body: some View {
+        Card(header: "翻译引擎", footer: footer) {
+            Row(title: "服务", detail: "当前启用：\(Settings.translationProvider.title)") {
+                Picker("翻译引擎", selection: $model.provider) {
+                    ForEach(TranslationProvider.allCases) { provider in
+                        Text(provider.title).tag(provider)
+                    }
+                }
+                .labelsHidden().frame(width: 200)
+                .disabled(model.working)
+            }
+            if model.provider != .system {
+                Row(title: "服务地址") {
+                    TextField(model.provider.defaultURL, text: $model.baseURL)
+                        .textFieldStyle(.roundedBorder).frame(width: 275)
+                        .disabled(model.working)
+                }
+                if model.provider == .deepseek {
+                    Row(title: "API Key", detail: "仅保存在系统钥匙串") {
+                        SecureField("输入 DeepSeek API Key", text: $model.apiKey)
+                            .textFieldStyle(.roundedBorder).frame(width: 275)
+                            .disabled(model.working)
+                    }
+                }
+                Row(title: "模型") {
+                    HStack(spacing: 6) {
+                        TextField("填写模型名称", text: $model.model)
+                            .textFieldStyle(.roundedBorder)
+                        if !model.models.isEmpty {
+                            Menu {
+                                ForEach(model.models, id: \.self) { name in
+                                    Button(name) { model.model = name }
+                                }
+                            } label: { Image(systemName: "chevron.down") }
+                            .fixedSize().help("选择 Ollama 已安装模型")
+                        }
+                    }
+                    .frame(width: 275).disabled(model.working)
+                }
+            }
+            Row(title: "配置操作", divider: model.message != nil) {
+                HStack(spacing: 8) {
+                    if model.working {
+                        ProgressView().controlSize(.small)
+                        Button("取消") { model.cancel() }
+                    } else {
+                        if model.provider == .ollama {
+                            Button("读取模型") { model.refreshModels() }
+                        }
+                        if model.provider != .system {
+                            Button("测试连接") { model.testConnection() }
+                        }
+                        Button("保存并启用") { model.save() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+            if let message = model.message {
+                Row(title: "提示", detail: message, divider: false) { EmptyView() }
+            }
+        }
+    }
+
+    private var footer: String {
+        switch model.provider {
+        case .system: return "Apple 系统翻译使用离线语言包。修改引擎配置后点击“保存并启用”。"
+        case .deepseek: return "原文会发送到配置的 DeepSeek 服务，按其 API 用量计费；无需离线翻译包。测试连接仅发送示例 Hello。修改后点击“保存并启用”。"
+        case .ollama: return "先启动 Ollama 并下载模型，再读取模型列表或填写名称。原文会发送到所填服务地址，使用本机地址时在本机处理。测试仅发送示例 Hello；修改后需保存并启用。"
         }
     }
 }
