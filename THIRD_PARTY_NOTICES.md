@@ -1,6 +1,6 @@
 # 第三方版权声明
 
-KShot 自身代码当前使用根目录的 [PolyForm Noncommercial License 1.0.0](LICENSE)，仅限许可证允许的非商业用途；版权声明见 [NOTICE](NOTICE)。以下第三方代码及依赖保留各自的许可证，本项目的非商业限制不改变这些第三方代码本身的许可。
+KShot 自身代码当前使用根目录的 [Apache License 2.0](LICENSE)，允许商业使用；项目来源及版权声明见 [NOTICE](NOTICE)。以下第三方代码及依赖保留各自的许可证。
 
 ## ScrollSnap
 

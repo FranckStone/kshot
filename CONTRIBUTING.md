@@ -4,7 +4,7 @@
 
 ## 许可与贡献
 
-本项目源码公开，当前采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，仅限许可证允许的非商业用途，不授予商业使用权。提交贡献时，请确认你有权将贡献按本项目当前许可证提供，并保留第三方代码原有的版权与许可声明。
+本项目当前采用 [Apache License 2.0](LICENSE)，允许商业使用。分发时须按协议保留相关版权与来源声明，包括 [NOTICE](NOTICE) 中的 KShot 项目名称、作者和仓库地址。提交贡献时，请确认你有权将贡献按本项目当前许可证提供，并保留第三方代码原有的版权与许可声明。
 
 ## 本地开发
 
@@ -31,6 +31,6 @@ Swift Package Manager 会下载固定版本的 Sparkle。普通构建不需要�
 
 ## 独立发布与官网部署
 
-独立发布与官网部署须符合本项目的非商业许可证。`release.sh` 面向官方更新渠道，需要维护者钥匙串中的 Sparkle 私钥。Fork 独立发布时，请使用自己的 bundle identifier、签名密钥、公钥和更新源，并调整 README、`Resources/Info.plist` 与发布脚本中的仓库地址。
+独立发布与官网部署须符合 Apache 2.0 的分发要求，并保留适用的 KShot 来源及第三方声明。`release.sh` 面向官方更新渠道，需要维护者钥匙串中的 Sparkle 私钥。Fork 独立发布时，请使用自己的 bundle identifier、签名密钥、公钥和更新源，并调整 README、`Resources/Info.plist` 与发布脚本中的仓库地址。
 
 `site/` 是官网的 Cloudflare Worker 与静态资源。独立部署前请将 `site/wrangler.jsonc` 中的账户 ID、域名及下载入口改为自己的配置，并通过本机环境提供 Cloudflare 凭据。
