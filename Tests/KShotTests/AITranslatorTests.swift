@@ -36,6 +36,14 @@ private final class TranslationURLProtocol: URLProtocol {
         client?.urlProtocol(self, didLoad: Data(text.utf8))
         if finish { client?.urlProtocolDidFinishLoading(self) }
     }
+    func sendContent(_ text: String, done: Bool = false) {
+        let deepseek = request.url!.path.hasSuffix("/chat/completions")
+        let json: [String: Any] = deepseek
+            ? ["choices": [["delta": ["content": text], "finish_reason": done ? "stop" : NSNull()]]]
+            : ["message": ["content": text], "done": done]
+        let value = String(decoding: try! JSONSerialization.data(withJSONObject: json), as: UTF8.self)
+        send(deepseek ? "data: \(value)\n\n" + (done ? "data: [DONE]\n\n" : "") : value + "\n", finish: done)
+    }
 }
 
 final class AITranslatorTests: XCTestCase {
@@ -65,6 +73,22 @@ final class AITranslatorTests: XCTestCase {
             data = result
         } else { throw AITranslationError.invalidResponse }
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func records(_ request: URLRequest) throws -> [AITranslationRecord] {
+        let messages = try XCTUnwrap(body(request)["messages"] as? [[String: String]])
+        let input = try XCTUnwrap(messages[1]["content"])
+        return try input.components(separatedBy: "\n").map {
+            try JSONDecoder().decode(AITranslationRecord.self, from: Data($0.utf8))
+        }
+    }
+
+    private func encoded(_ values: [String]) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try values.enumerated().map {
+            String(decoding: try encoder.encode(AITranslationRecord(id: $0.offset, text: $0.element)), as: UTF8.self)
+        }.joined(separator: "\n")
     }
 
     override func tearDown() { TranslationURLProtocol.respond = nil; TranslationURLProtocol.streaming = nil; super.tearDown() }
@@ -101,9 +125,8 @@ final class AITranslatorTests: XCTestCase {
             XCTAssertEqual((body["thinking"] as? [String: String])?["type"], "disabled")
             let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
             XCTAssertTrue(messages[0]["content"]!.contains("Identify the source language yourself"))
-            let input = try XCTUnwrap(messages[1]["content"])
-            XCTAssertTrue(["QXJZ", "Hello"].contains(input))
-            return (200, ["choices": [["message": ["content": input == "Hello" ? "你好" : input], "finish_reason": "stop"]]])
+            XCTAssertEqual(try self.records(request).map(\.text), ["QXJZ", "Hello"])
+            return (200, ["choices": [["message": ["content": try self.encoded(["QXJZ", "你好"])], "finish_reason": "stop"]]])
         }
         let output = try await client().translate("QXJZ\nHello", source: nil, target: TargetLanguage.all[0], configuration: config(.deepseek))
         XCTAssertEqual(output.text, "QXJZ\n你好")
@@ -155,11 +178,10 @@ final class AITranslatorTests: XCTestCase {
         var inputs: [String] = []
         var updates: [String] = []
         TranslationURLProtocol.respond = { request in
-            let messages = try XCTUnwrap(self.body(request)["messages"] as? [[String: String]])
-            let input = try XCTUnwrap(messages[1]["content"])
-            inputs.append(input)
+            let records = try self.records(request)
+            inputs += records.map(\.text)
             let values = ["Hello": "\n你好\n世界\n", "Open": "- 打开\n窗口", "Save": "# 保存"]
-            let output = try XCTUnwrap(values[input])
+            let output = try self.encoded(records.map { try XCTUnwrap(values[$0.text]) })
             return (200, ["done": true, "message": ["content": output]])
         }
         let text = "\t1.  Hello  \r\n \t\r\n  - [x] Open\t\n# Save\rhttps://example.com\u{2028}123-456\n"
@@ -183,6 +205,147 @@ final class AITranslatorTests: XCTestCase {
         let text = "这是已经翻译成中文的内容。\r\n\r\nHello\n\n" + payload + "\n"
         let output = try await client().translate(text, source: nil, target: TargetLanguage.all[0], excluding: [payload], configuration: config())
         XCTAssertEqual(output.text, "这是已经翻译成中文的内容。\r\n\r\n你好\n\n" + payload + "\n")
+    }
+
+    func testTwentyLinesUseOneRequestForEachAIProvider() async throws {
+        let source = (0..<20).map { "Hello \($0)" }.joined(separator: "\n")
+        let expected = source.replacingOccurrences(of: "Hello", with: "你好")
+        for provider in [TranslationProvider.deepseek, .ollama] {
+            var requests = 0
+            TranslationURLProtocol.respond = { request in
+                requests += 1
+                let records = try self.records(request)
+                XCTAssertEqual(records.map(\.id), Array(0..<20))
+                let output = try self.encoded(records.map { $0.text.replacingOccurrences(of: "Hello", with: "你好") })
+                return (200, provider == .deepseek
+                    ? ["choices": [["message": ["content": output], "finish_reason": "stop"]]]
+                    : ["done": true, "message": ["content": output]])
+            }
+            let output = try await client().translate(source, source: TargetLanguage.all[2], target: TargetLanguage.all[0], configuration: config(provider))
+            XCTAssertEqual(requests, 1)
+            XCTAssertEqual(output.text, expected)
+        }
+    }
+
+    func testLargeInputsSplitIntoBoundedBatchesInOrder() async throws {
+        var sizes: [Int] = []
+        TranslationURLProtocol.respond = { request in
+            let records = try self.records(request)
+            sizes.append(records.count)
+            XCTAssertEqual(records.map(\.id), Array(0..<records.count))
+            return (200, ["done": true, "message": ["content": try self.encoded(records.map { $0.text.replacingOccurrences(of: "Hello", with: "你好") })]])
+        }
+        let source = (0..<70).map { "Hello \($0)" }.joined(separator: "\r\n")
+        let output = try await client().translate(source, source: TargetLanguage.all[2], target: TargetLanguage.all[0], configuration: config())
+        XCTAssertEqual(sizes, [32, 32, 6])
+        XCTAssertEqual(output.text, source.replacingOccurrences(of: "Hello", with: "你好"))
+    }
+
+    func testBatchKeepsMixedLanguageAndProtectedMultilinePayloadLocal() async throws {
+        let payload = "QR-FIRST\r\nQR-SECOND"
+        let source = "\t1. Hello  \r\n这是原文中的中文。\n" + payload + "\nhttps://example.com\r\n  - Open\t\n"
+        var requests = 0
+        TranslationURLProtocol.respond = { request in
+            requests += 1
+            XCTAssertEqual(try self.records(request).map(\.text), ["Hello", "Open"])
+            return (200, ["done": true, "message": ["content": try self.encoded(["你好", "打开"])]])
+        }
+        let output = try await client().translate(source, source: nil, target: TargetLanguage.all[0], excluding: [payload], configuration: config())
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(output.text, source.replacingOccurrences(of: "Hello", with: "你好").replacingOccurrences(of: "Open", with: "打开"))
+    }
+
+    func testUnsupportedBatchFormatFallsBackWithoutRetryingBatches() async throws {
+        var requests = 0
+        TranslationURLProtocol.respond = { request in
+            requests += 1
+            let messages = try XCTUnwrap(self.body(request)["messages"] as? [[String: String]])
+            let input = try XCTUnwrap(messages[1]["content"])
+            if requests == 1 {
+                XCTAssertEqual(try self.records(request).count, 32)
+                return (200, ["done": true, "message": ["content": "模型不支持 JSON 输出"]])
+            }
+            XCTAssertTrue(input.hasPrefix("Hello "), "Fallback must use plain single-line input")
+            return (200, ["done": true, "message": ["content": input.replacingOccurrences(of: "Hello", with: "你好")]])
+        }
+        let source = (0..<35).map { "Hello \($0)" }.joined(separator: "\n")
+        let output = try await client().translate(source, source: TargetLanguage.all[2], target: TargetLanguage.all[0], configuration: config())
+        XCTAssertEqual(requests, 36)
+        XCTAssertEqual(output.text, source.replacingOccurrences(of: "Hello", with: "你好"))
+    }
+
+    @MainActor
+    func testBatchStreamsCurrentLineBeforeRecordOrResponseCompletes() async throws {
+        for provider in [TranslationProvider.deepseek, .ollama] {
+            var finished = false
+            var early: [String] = []
+            TranslationURLProtocol.streaming = { connection in
+                DispatchQueue.main.async {
+                    connection.beginStream()
+                    connection.sendContent(#"{"id":0,"text":"你"#)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        connection.sendContent("好\"}\n" + #"{"id":1,"text":"打"#)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            finished = true
+                            connection.sendContent("开\"}", done: true)
+                        }
+                    }
+                }
+            }
+            let output = try await client().translate("  1. Hello  \r\n\n - Open\t", source: TargetLanguage.all[2], target: TargetLanguage.all[0], configuration: config(provider), onUpdate: {
+                if !finished { early.append($0) }
+                XCTAssertFalse($0.contains("\"id\""))
+            })
+            XCTAssertTrue(early.contains("  1. 你"))
+            XCTAssertTrue(early.contains("  1. 你好  \r\n\n - 打"))
+            XCTAssertEqual(output.text, "  1. 你好  \r\n\n - 打开\t")
+        }
+    }
+
+    @MainActor
+    func testInterruptedBatchPreservesPartialTextAndDoesNotRetry() async {
+        var requests = 0
+        var updates: [String] = []
+        TranslationURLProtocol.streaming = { connection in
+            requests += 1
+            connection.beginStream()
+            connection.sendContent(#"{"id":0,"text":"部分译文"#)
+            connection.send("", finish: true)
+        }
+        do {
+            _ = try await client().translate("Hello\nOpen", source: TargetLanguage.all[2], target: TargetLanguage.all[0], configuration: config(), onUpdate: { updates.append($0) })
+            XCTFail("Expected an interrupted stream")
+        } catch {
+            guard case AITranslationError.interrupted = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(updates.last, "部分译文")
+    }
+
+    @MainActor
+    func testCancellationDuringBatchStopsBeforeAnyLaterRequest() async {
+        var requests = 0
+        var updates: [String] = []
+        var running: Task<TranslationOutput, Error>?
+        TranslationURLProtocol.streaming = { connection in
+            requests += 1
+            DispatchQueue.main.async {
+                connection.beginStream()
+                connection.sendContent(#"{"id":0,"text":"你"#)
+            }
+        }
+        running = Task {
+            try await client().translate((0..<40).map { "Hello \($0)" }.joined(separator: "\n"), source: TargetLanguage.all[2], target: TargetLanguage.all[0], configuration: config(), onUpdate: {
+                updates.append($0)
+                running?.cancel()
+            })
+        }
+        do {
+            _ = try await running!.value
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(updates, ["你"])
     }
 
     func testAuthenticationErrorsEmptyAndTruncatedResponsesDoNotBecomeTranslations() async throws {

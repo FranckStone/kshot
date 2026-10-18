@@ -73,7 +73,7 @@
 - **录屏**（`⌘R` 或全局 `⌃⌘R`）：录制选区为 MP4，或导出 GIF；文件存到默认目录并复制到剪贴板。
 - **钉图增强**：`⌥` 滚轮或右键调透明度、鼠标穿透、`⌥` 拖动把图片拖到其他应用、右键再编辑；菜单栏 › 钉图 可一键隐藏 / 显示 / 关闭全部。
 - **设置**（菜单 › 设置… `⌘,`）：玻璃侧栏 + 分组卡片的设置窗口，分「通用 / 权限 / 保存 / 翻译 / 快捷键 / 历史 / 关于」七页：放大镜、快门声、窗口阴影、录屏指针、开机自启（菜单栏不再单独放开关）；屏幕录制（必需）与辅助功能（长截图自动滚动，可选）的授权状态、跳转系统设置、授权后一键重启；默认保存目录、文件名模板（`{date}` `{time}` `{w}` `{h}`，可一键插入）、PNG / JPEG / HEIC、保存免弹窗、完成时自动保存；历史保留数量与清空。
-- **翻译设置**（设置 › 翻译）：可指定默认目标语言，或沿用自动选择（中文译英、其他译中）；可选 Apple 系统翻译、DeepSeek 或 Ollama。DeepSeek 配置 HTTPS 服务地址、模型和 API Key（存于系统钥匙串），原文发送到所配置服务并按 API 用量计费；Ollama 配置服务地址和模型，支持读取已安装模型，默认地址 `http://localhost:11434`。AI 引擎由模型判断原文语言，程序按原文行保留换行、连续空行、缩进、列表编号和项目符号，避免模型重排段落；Apple 系统翻译也保留这些结构。DeepSeek（SSE）和 Ollama（逐行 JSON）流式接收译文，边生成边显示，可在生成中复制已显示的文字、点击“停止翻译”保留未完成内容并重试。连接中断也保留已生成文字并标明未完成；支持手动指定原文语言、二维码内容保护。Apple 系统翻译仍在完成后显示结果。测试连接仅发送示例 Hello，修改后点击“保存并启用”，不自动切换其他服务。接口参考 [DeepSeek 官方文档](https://api-docs.deepseek.com/) 与 [Ollama 官方文档](https://docs.ollama.com/api/chat)。Apple 引擎可选择原文和目标语言后查看离线翻译包状态，点击“下载翻译包”后在系统弹窗中下载所需语言，再点“完成”；也可点“管理翻译语言…”前往系统设置的“语言与地区 › 翻译语言”下载。下载就绪后可离线翻译（macOS 15+）。
+- **翻译设置**（设置 › 翻译）：可指定默认目标语言，或沿用自动选择（中文译英、其他译中）；可选 Apple 系统翻译、DeepSeek 或 Ollama。DeepSeek 配置 HTTPS 服务地址、模型和 API Key（存于系统钥匙串），原文发送到所配置服务并按 API 用量计费；Ollama 配置服务地址和模型，支持读取已安装模型，默认地址 `http://localhost:11434`。AI 引擎由模型判断原文语言，多行正文按最多 32 行或约 6 KB 分块发送，减少重复请求；程序按行编号还原换行、连续空行、缩进、列表编号和项目符号，流式显示当前行正文，模型不支持分块格式时自动回退逐行翻译；Apple 系统翻译也保留这些结构。DeepSeek（SSE）和 Ollama（逐行 JSON）流式接收译文，边生成边显示，可在生成中复制已显示的文字、点击“停止翻译”保留未完成内容并重试。连接中断也保留已生成文字并标明未完成；支持手动指定原文语言、二维码内容保护。Apple 系统翻译仍在完成后显示结果。测试连接仅发送示例 Hello，修改后点击“保存并启用”，不自动切换其他服务。接口参考 [DeepSeek 官方文档](https://api-docs.deepseek.com/) 与 [Ollama 官方文档](https://docs.ollama.com/api/chat)。Apple 引擎可选择原文和目标语言后查看离线翻译包状态，点击“下载翻译包”后在系统弹窗中下载所需语言，再点“完成”；也可点“管理翻译语言…”前往系统设置的“语言与地区 › 翻译语言”下载。下载就绪后可离线翻译（macOS 15+）。
 - **快捷键设置**（设置 › 快捷键）：全局快捷键（截图、截取上次区域、延时 5 秒截图、录屏、显示 / 隐藏钉图）和截图时的快捷键（完成、保存、钉图、长截图、录屏、美化、识别与翻译、自动打码、撤销、重做）都可以自定义；点击后按下新组合键，`⌫` 清除，单项或全部恢复默认，冲突的组合会标红提示。
 
 ## 下载与安装
@@ -221,7 +221,7 @@ open build/KShot.app --args --longshot x,y,w,h   # 直接对主屏指定区域�
 - `PinWindow.swift` 钉在屏幕上的悬浮图片窗口
 - `TextRecognizer.swift` / `OCRResultWindow.swift` 文字识别与结果窗口
 - `Translator.swift` 翻译引擎路由与系统 Translation 框架宿主
-- `AITranslator.swift` / `AITranslationStream.swift` / `TranslationTextLayout.swift` / `AITranslationSettings.swift` DeepSeek、Ollama 流式客户端、钥匙串与引擎配置
+- `AITranslator.swift` / `AITranslationBatch.swift` / `AITranslationStream.swift` / `TranslationTextLayout.swift` / `AITranslationSettings.swift` DeepSeek、Ollama 分块与流式客户端、排版还原、钥匙串与引擎配置
 - `LongScreenshot.swift` / `RegionStream.swift` / `ImageStitcher.swift` / `VisionOffsetEstimator.swift` 长截图：SCStream 60fps 区域捕获、实时预览面板、可选自动滚动；帧间位移用 Vision 平移配准做 5 横带多数投票（移植自 [ScrollSnap](https://github.com/Brkgng/ScrollSnap)，MIT），再用行签名精修到整像素，自动识别固定顶栏/底栏，支持往回滚
 - `ImageEditorWindow.swift` 图片编辑窗口（长截图完成后的标注画布，复用工具条与标注渲染）
 - `MenuBarIcon.swift` 菜单栏模板图标
